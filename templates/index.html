@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系統監控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        
+        .header { text-align: center; margin-bottom: 40px; color: white; }
+        .header h1 { font-size: 3rem; margin-bottom: 5px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
+        .header .host-info { font-size: 1rem; opacity: 0.8; margin-bottom: 10px; background: rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 20px; display: inline-block; }
+        .header .subtitle { font-size: 1.2rem; opacity: 0.9; margin-bottom: 15px; }
+        
+        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 25px; margin-bottom: 40px; }
+        .status-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); padding: 25px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); border: 1px solid rgba(255,255,255,0.2); transition: transform 0.3s ease, box-shadow 0.3s ease; }
+        .status-card:hover { transform: translateY(-5px); box-shadow: 0 12px 40px rgba(0,0,0,0.15); }
+        .status-card h3 { color: #333; margin-bottom: 20px; font-size: 1.3rem; display: flex; align-items: center; gap: 10px; }
+        .metric { display: flex; justify-content: space-between; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        .metric:last-child { border-bottom: none; }
+        .metric span:first-child { color: #666; font-weight: 500; }
+        .metric span:last-child { font-weight: 700; color: #333; }
+        
+        .buttons { text-align: center; margin: 40px 0; }
+        .btn { display: inline-block; padding: 15px 30px; margin: 0 15px 15px 0; background: linear-gradient(45deg, #007bff, #0056b3); color: white; text-decoration: none; border-radius: 25px; border: none; cursor: pointer; font-size: 1.1rem; font-weight: 600; transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(0,123,255,0.3); }
+        .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,123,255,0.4); }
+        .btn.success { background: linear-gradient(45deg, #28a745, #20c997); box-shadow: 0 4px 15px rgba(40,167,69,0.3); }
+        .btn.success:hover { box-shadow: 0 8px 25px rgba(40,167,69,0.4); }
+        .btn.warning { background: linear-gradient(45deg, #ffc107, #fd7e14); color: #333; box-shadow: 0 4px 15px rgba(255,193,7,0.3); }
+        .btn.warning:hover { box-shadow: 0 8px 25px rgba(255,193,7,0.4); }
+        
+        .chart-controls { display: flex; justify-content: center; align-items: center; gap: 15px; margin: 40px 0; }
+        .time-selector { position: relative; }
+        .time-input { padding: 12px 20px; border: 2px solid rgba(255,255,255,0.3); border-radius: 25px; background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: white; font-size: 1rem; width: 200px; }
+        .time-input::placeholder { color: rgba(255,255,255,0.7); }
+        .time-input:focus { outline: none; border-color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.2); }
+        .dropdown { position: absolute; top: 100%; left: 0; right: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); margin-top: 5px; z-index: 1000; max-height: 200px; overflow-y: auto; display: none; }
+        .dropdown-item { padding: 10px 15px; cursor: pointer; color: #333; transition: background 0.2s; }
+        .dropdown-item:hover { background: rgba(0,123,255,0.1); }
+        .live-indicator { display: flex; align-items: center; gap: 8px; color: white; font-weight: 600; }
+        .live-dot { width: 10px; height: 10px; background: #28a745; border-radius: 50%; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .loading { display: none; text-align: center; margin: 30px 0; color: white; }
+        .loading h3 { font-size: 1.5rem; margin-bottom: 10px; }
+        
+        .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 40px; }
+        .chart-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); padding: 25px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); text-align: center; border: 1px solid rgba(255,255,255,0.2); transition: transform 0.3s ease; }
+        .chart-card:hover { transform: scale(1.02); }
+        .chart-card h4 { margin-bottom: 15px; color: #333; font-size: 1.2rem; }
+        .chart-card img { max-width: 100%; height: auto; border-radius: 10px; cursor: pointer; transition: transform 0.3s ease; }
+        .chart-card img:hover { transform: scale(1.05); }
+        
+        @media (max-width: 768px) {
+            .header h1 { font-size: 2rem; }
+            .status-grid { grid-template-columns: 1fr; }
+            .charts-grid { grid-template-columns: 1fr; }
+            .chart-controls { flex-direction: column; gap: 10px; }
+            .time-input { width: 150px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🖥️ 系統監控</h1>
+            <div class="host-info" id="hostInfo">
+                <span id="hostname">載入中...</span>
+            </div>
+            <div class="subtitle">實時系統狀態監控與分析</div>
+        </div>
+        
+        <div class="status-grid" id="statusGrid">
+            <div class="status-card">
+                <h3>📊 載入中...</h3>
+                <p>正在獲取系統狀態...</p>
+            </div>
+        </div>
+        
+        <div class="chart-controls">
+            <div class="live-indicator">
+                <div class="live-dot"></div>
+                <span>實時監控</span>
+            </div>
+            
+            <div class="time-selector">
+                <input type="text" class="time-input" id="timeRange" placeholder="選擇時間範圍..." 
+                       onfocus="showDropdown()" onblur="hideDropdown()" oninput="filterDropdown()">
+                <div class="dropdown" id="timeDropdown">
+                    <div class="dropdown-item" onclick="selectTime('15m')">15 分鐘</div>
+                    <div class="dropdown-item" onclick="selectTime('30m')">30 分鐘</div>
+                    <div class="dropdown-item" onclick="selectTime('1h')">1 小時</div>
+                    <div class="dropdown-item" onclick="selectTime('2h')">2 小時</div>
+                    <div class="dropdown-item" onclick="selectTime('6h')">6 小時</div>
+                    <div class="dropdown-item" onclick="selectTime('12h')">12 小時</div>
+                    <div class="dropdown-item" onclick="selectTime('24h')">24 小時</div>
+                    <div class="dropdown-item" onclick="selectTime('3d')">3 天</div>
+                    <div class="dropdown-item" onclick="selectTime('7d')">7 天</div>
+                </div>
+            </div>
+            
+            <button class="btn success" onclick="generateSelectedChart()">📊 生成圖表</button>
+            <button class="btn warning" onclick="showGpuProcesses()">🎮 GPU進程</button>
+        </div>
+        
+        <div class="loading" id="loading">
+            <h3>⏳ 正在生成圖表...</h3>
+            <p>請稍候，這可能需要幾秒鐘...</p>
+        </div>
+        
+        <div class="charts-grid" id="chartsGrid"></div>
+    </div>
+    
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
