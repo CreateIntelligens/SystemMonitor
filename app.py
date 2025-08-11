@@ -157,15 +157,64 @@ async def get_gpu_processes():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/plot/processes")
+@app.get("/api/all-processes/{timespan}")
+async def get_all_processes(timespan: str):
+    """獲取指定時間範圍內的所有歷史進程（包括已結束的）"""
+    try:
+        from datetime import datetime, timedelta
+        
+        # 計算時間範圍
+        now = datetime.now()
+        if timespan.endswith('m'):
+            minutes = int(timespan[:-1])
+            start_time = now - timedelta(minutes=minutes)
+        elif timespan.endswith('h'):
+            hours = int(timespan[:-1])
+            start_time = now - timedelta(hours=hours)
+        elif timespan.endswith('d'):
+            days = int(timespan[:-1])
+            start_time = now - timedelta(days=days)
+        else:
+            start_time = now - timedelta(hours=24)  # 預設24小時
+        
+        # 獲取該時間範圍內的所有進程（包括已結束的）
+        all_processes = database.get_unique_processes_in_timespan(start_time, now)
+        
+        return {
+            "success": True,
+            "processes": all_processes,
+            "timespan": timespan,
+            "count": len(all_processes)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/processes/plot-comparison")
 async def plot_multiple_processes(req: PlotProcessesRequest):
     """為多個指定PID生成對比圖表"""
     try:
+        print(f"🔍 接收到進程對比繪圖請求")
+        print(f"   PIDs: {req.pids} (類型: {type(req.pids)})")
+        print(f"   時間範圍: {req.timespan}")
+        
+        # 驗證PID列表
+        if not req.pids or len(req.pids) == 0:
+            return {"success": False, "error": "請至少選擇一個有效的PID"}
+        
+        # 確保所有PID都是有效的整數
+        for i, pid in enumerate(req.pids):
+            print(f"   PID[{i}]: {pid} (類型: {type(pid)})")
+            if not isinstance(pid, int) or pid <= 0:
+                print(f"❌ 無效的PID: {pid}")
+                return {"success": False, "error": f"PID列表包含無效值: {pid}"}
         from datetime import datetime, timedelta
 
         # 1. 計算時間範圍
         now = datetime.now()
-        if req.timespan.endswith('h'):
+        if req.timespan.endswith('m'):
+            minutes = int(req.timespan[:-1])
+            start_time = now - timedelta(minutes=minutes)
+        elif req.timespan.endswith('h'):
             hours = int(req.timespan[:-1])
             start_time = now - timedelta(hours=hours)
         elif req.timespan.endswith('d'):
@@ -179,6 +228,12 @@ async def plot_multiple_processes(req: PlotProcessesRequest):
 
         if not process_data:
             return {"success": False, "error": f"在指定時間範圍內沒有找到任何選定PID的數據。"}
+        
+        # 調試：打印數據結構
+        print(f"🔍 找到 {len(process_data)} 條進程數據")
+        if process_data:
+            print(f"   第一條數據的欄位: {list(process_data[0].keys())}")
+            print(f"   第一條數據: {process_data[0]}")
 
         # 3. 調用 visualizer 生成圖表
         chart_path = visualizer.plot_process_comparison(process_data, req.pids, req.timespan)
@@ -187,11 +242,15 @@ async def plot_multiple_processes(req: PlotProcessesRequest):
             "success": True,
             "chart": {
                 "title": f"進程對比圖 ({len(req.pids)} 個進程)",
-                "path": Path(chart_path).name
+                "path": Path(chart_path).relative_to("plots")
             }
         }
     except Exception as e:
-        return {"success": False, "error": f"生成圖表時發生錯誤: {e}"}
+        import traceback
+        error_msg = f"生成圖表時發生錯誤: {str(e)}"
+        print(f"❌ 進程圖表生成錯誤: {error_msg}")
+        print(f"   錯誤詳情: {traceback.format_exc()}")
+        return {"success": False, "error": error_msg}
 
 
 @app.post("/api/plot/process/{timespan}")
@@ -226,7 +285,7 @@ async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks
             filter_desc = []
             if pid: filter_desc.append(f"PID {pid}")
             if process_name: filter_desc.append(f"進程名 '{process_name}'")
-            if command_filter: filter_desc.append(f"命令 '{command_filter}'")
+            if command_filter: filter_desc.append(f"指令 '{command_filter}'")
             filter_str = ", ".join(filter_desc) if filter_desc else "所有條件"
             return {"success": False, "error": f"沒有找到匹配 {filter_str} 的進程數據"}
         

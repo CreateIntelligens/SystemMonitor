@@ -180,7 +180,7 @@ class SystemMonitor:
             gpu_processes = self.collector.get_top_gpu_processes(limit=5)
             if gpu_processes:
                 print(f"\n🔥 當前 GPU 進程 (前5名):")
-                print(f"{'PID':>8} {'進程名':<15} {'GPU記憶體':<10} {'CPU%':<6} {'命令':<30}")
+                print(f"{'PID':>8} {'進程名':<15} {'GPU記憶體':<10} {'CPU%':<6} {'指令':<30}")
                 print("-" * 70)
                 for proc in gpu_processes:
                     cmd = proc.get('command', proc.get('name', 'N/A'))
@@ -206,7 +206,7 @@ class SystemMonitor:
         
         if current_processes:
             print("🔥 當前 GPU 進程:")
-            print(f"{'PID':>8} {'進程名':<15} {'GPU記憶體':>10} {'CPU%':>6} {'RAM':>8} {'命令':<25}")
+            print(f"{'PID':>8} {'進程名':<15} {'GPU記憶體':>10} {'CPU%':>6} {'RAM':>8} {'指令':<25}")
             print("-" * 80)
             
             for proc in current_processes:
@@ -330,17 +330,17 @@ def main():
     # 通用參數
     parser.add_argument('--config', help='配置文件路徑')
     
-    # 子命令
-    subparsers = parser.add_subparsers(dest='command', help='可用命令')
+    # 子指令
+    subparsers = parser.add_subparsers(dest='command', help='可用指令')
     
-    # 監控命令
+    # 監控指令
     monitor_parser = subparsers.add_parser('monitor', help='開始監控')
     monitor_parser.add_argument('--interval', type=int, help='數據收集間隔秒數')
     
-    # 狀態命令
+    # 狀態指令
     subparsers.add_parser('status', help='顯示監控狀態')
     
-    # GPU 進程命令
+    # GPU 進程指令
     gpu_parser = subparsers.add_parser('gpu-processes', help='顯示 GPU 進程信息')
     gpu_parser.add_argument('--timespan', default='1h', 
                            choices=['1h', '6h', '24h', '7d'],
@@ -348,22 +348,31 @@ def main():
     gpu_parser.add_argument('--limit', type=int, default=10,
                            help='顯示進程數量 (預設: 10)')
     
-    # 圖表命令
-    plot_parser = subparsers.add_parser('plot', help='生成圖表')
+    # 圖表指令
+    plot_parser = subparsers.add_parser('plot', help='生成系統圖表')
     plot_parser.add_argument('--timespan', default='24h',
                             help='時間範圍 (支援: 90m, 24h, 3000s, 7d 等格式，預設: 24h)')
     plot_parser.add_argument('--output', help='輸出目錄')
+    plot_parser.add_argument('--database', help='指定資料庫檔案 (如: monitoring_server2.db)', default='monitoring.db')
     
-    # 導出命令
+    # 新增進程對比繪圖命令
+    process_plot_parser = subparsers.add_parser('plot-processes', help='繪製進程對比圖')
+    process_plot_parser.add_argument('pids', nargs='+', type=int, help='進程PID列表')
+    process_plot_parser.add_argument('timespan', help='時間範圍 (如: 1h, 24h, 3d)')
+    process_plot_parser.add_argument('--database', help='指定資料庫檔案', default='monitoring.db')
+    process_plot_parser.add_argument('--output', help='輸出檔案路徑')
+    process_plot_parser.add_argument('--title', help='圖表標題')
+    
+    # 導出指令
     export_parser = subparsers.add_parser('export', help='導出數據')
     export_parser.add_argument('output', help='輸出 CSV 文件路徑')
     
-    # 清理命令
+    # 清理指令
     cleanup_parser = subparsers.add_parser('cleanup', help='清理舊數據')
     cleanup_parser.add_argument('--keep-days', type=int, default=30,
                                help='保留天數 (預設: 30)')
     
-    # Web 介面命令
+    # Web 介面指令
     web_parser = subparsers.add_parser('web', help='啟動 Web 介面')
     web_parser.add_argument('--host', help='綁定主機地址')
     web_parser.add_argument('--port', type=int, help='綁定端口')
@@ -371,14 +380,14 @@ def main():
     
     args = parser.parse_args()
     
-    # 如果沒有指定命令，預設顯示狀態
+    # 如果沒有指定指令，預設顯示狀態
     if not args.command:
         args.command = 'status'
     
     # 創建配置
     config = Config(args.config) if args.config else Config()
     
-    # 如果命令行指定了參數，覆蓋配置
+    # 如果指令行指定了參數，覆蓋配置
     if hasattr(args, 'interval') and args.interval:
         config.set('monitoring.interval', args.interval)
     
@@ -403,13 +412,90 @@ def main():
             monitor.show_gpu_processes(timespan=args.timespan, limit=args.limit)
             
         elif args.command == 'plot':
-            monitor.generate_plots(timespan=args.timespan, output_dir=args.output)
+            # 如果指定了不同的資料庫，創建新的監控器
+            if args.database != 'monitoring.db':
+                from pathlib import Path
+                db_path = Path(args.database)
+                if not db_path.exists():
+                    print(f"❌ 資料庫檔案不存在: {args.database}")
+                    sys.exit(1)
+                
+                print(f"📊 使用資料庫: {args.database}")
+                # 創建新的監控器實例
+                monitor_alt = SystemMonitor(config)
+                monitor_alt.database = MonitoringDatabase(str(db_path))
+                monitor_alt.generate_plots(timespan=args.timespan, output_dir=args.output)
+            else:
+                monitor.generate_plots(timespan=args.timespan, output_dir=args.output)
             
         elif args.command == 'export':
             monitor.export_data(args.output)
             
         elif args.command == 'cleanup':
             monitor.cleanup_data(args.keep_days)
+            
+        elif args.command == 'plot-processes':
+            # 如果指定了不同的資料庫，創建新的監控器
+            if args.database != 'monitoring.db':
+                # 創建新的資料庫實例
+                from pathlib import Path
+                db_path = Path(args.database)
+                if not db_path.exists():
+                    print(f"❌ 資料庫檔案不存在: {args.database}")
+                    sys.exit(1)
+                
+                print(f"📊 使用資料庫: {args.database}")
+                database = MonitoringDatabase(str(db_path))
+                visualizer = SystemMonitorVisualizer()
+                visualizer.output_dir = Path(config.plots_dir)
+            else:
+                database = monitor.database
+                visualizer = monitor.visualizer
+            
+            # 計算時間範圍
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            if args.timespan.endswith('m'):
+                minutes = int(args.timespan[:-1])
+                start_time = now - timedelta(minutes=minutes)
+            elif args.timespan.endswith('h'):
+                hours = int(args.timespan[:-1])
+                start_time = now - timedelta(hours=hours)
+            elif args.timespan.endswith('d'):
+                days = int(args.timespan[:-1])
+                start_time = now - timedelta(days=days)
+            else:
+                print(f"❌ 不支援的時間格式: {args.timespan}")
+                print("支援格式: 30m, 2h, 3d")
+                sys.exit(1)
+            
+            # 獲取進程資料
+            process_data = database.get_processes_by_pids(args.pids, start_time, now)
+            if not process_data:
+                print(f"❌ 在時間範圍 {args.timespan} 內沒有找到PID {args.pids} 的資料")
+                sys.exit(1)
+            
+            print(f"📈 找到 {len(process_data)} 條進程記錄")
+            
+            # 生成圖表
+            try:
+                chart_path = visualizer.plot_process_comparison(
+                    process_data, 
+                    args.pids, 
+                    args.timespan
+                )
+                
+                if args.output:
+                    # 如果指定了輸出路徑，複製檔案
+                    import shutil
+                    shutil.copy2(chart_path, args.output)
+                    print(f"✅ 進程對比圖已生成: {args.output}")
+                else:
+                    print(f"✅ 進程對比圖已生成: {chart_path}")
+                    
+            except Exception as e:
+                print(f"❌ 生成圖表失敗: {e}")
+                sys.exit(1)
             
         elif args.command == 'web':
             if not WEB_AVAILABLE:

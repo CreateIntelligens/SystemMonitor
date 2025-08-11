@@ -71,7 +71,7 @@ def main():
     # 檢查 GPU
     check_gpu()
     
-    print("\n🎯 可用命令:")
+    print("\n🎯 可用指令:")
     print("  python system_monitor.py status         # 查看狀態")
     print("  python system_monitor.py monitor        # 開始監控")  
     print("  python system_monitor.py web            # Web 介面")

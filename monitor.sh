@@ -24,15 +24,16 @@ print_header() {
 }
 
 print_usage() {
-    echo "使用方法: $0 <命令> [選項]"
+    echo "使用方法: $0 <指令> [選項]"
     echo
-    echo "🚀 快速命令:"
+    echo "🚀 快速指令:"
     echo "  start           智能啟動監控（自動選擇最佳方式）"
     echo "  stop            停止監控"
     echo "  status          查看監控狀態"
-    echo "  plot [範圍]     生成圖表 (1h/6h/24h/7d/30d)"
+    echo "  plot [範圍]     生成系統圖表 (1h/6h/24h/7d/30d)"
+    echo "  plot-processes  繪製進程對比圖"
     echo
-    echo "🐳 Docker 命令:"
+    echo "🐳 Docker 指令:"
     echo "  start-web       啟動 Web 服務"
     echo "  start-monitor   啟動監控服務（會詢問執行方式）"
     echo "  logs            查看服務日誌"
@@ -42,7 +43,7 @@ print_usage() {
     echo "  export <文件>   導出數據到 CSV"
     echo "  cleanup         清理舊數據"
     echo
-    echo "🛠️  維護命令:"
+    echo "🛠️  維護指令:"
     echo "  build           構建 Docker 鏡像"
     echo "  clean           清理 Docker 資源"
     echo "  update          更新並重啟服務"
@@ -53,10 +54,16 @@ print_usage() {
     echo "  - 本機環境不完整：自動使用 Docker"
     echo "  - Docker 啟動即自動監控（Web + 監控同時運行）"
     echo
+    echo "🗄️  多資料庫支援:"
+    echo "  --database=檔案  指定資料庫檔案 (適用於 plot 和 plot-processes)"
+    echo
     echo "範例:"
-    echo "  $0 start               # 智能啟動監控"
-    echo "  $0 plot 24h            # 生成 24 小時圖表"
-    echo "  $0 status service      # 查看服務詳細狀態"
+    echo "  $0 start                              # 智能啟動監控"
+    echo "  $0 plot 24h                           # 生成24小時系統圖表"
+    echo "  $0 plot 2d --database=server2.db     # 使用其他機器的資料庫"
+    echo "  $0 plot-processes 1234 5678 2h       # 繪製PID 1234和5678的2小時對比圖"
+    echo "  $0 plot-processes 999 1h --database=remote.db  # 跨機器進程分析"
+    echo "  $0 status service                     # 查看服務詳細狀態"
 }
 
 check_docker() {
@@ -354,9 +361,94 @@ monitor_status() {
 }
 
 generate_plots() {
-    timespan=${1:-24h}
+    local timespan=${1:-24h}
+    local database=${2:-}
+    
     echo -e "${BLUE}📈 生成圖表 (${timespan})...${NC}"
-    python src/system_monitor.py plot --timespan $timespan
+    
+    # 構建命令
+    local cmd="python src/system_monitor.py plot --timespan $timespan"
+    
+    # 如果指定了資料庫
+    if [[ -n "$database" ]]; then
+        if [[ ! -f "$database" ]]; then
+            echo -e "${RED}❌ 資料庫檔案不存在: $database${NC}"
+            return 1
+        fi
+        cmd="$cmd --database=$database"
+        echo -e "${YELLOW}📊 使用資料庫: $database${NC}"
+    fi
+    
+    eval $cmd
+}
+
+# 新增：繪製進程對比圖
+plot_processes() {
+    local pids=()
+    local timespan=""
+    local database=""
+    local output=""
+    
+    # 解析參數
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --timespan=*)
+                timespan="${1#*=}"
+                shift
+                ;;
+            --database=*)
+                database="${1#*=}"
+                shift
+                ;;
+            --output=*)
+                output="${1#*=}"
+                shift
+                ;;
+            *)
+                if [[ "$1" =~ ^[0-9]+$ ]]; then
+                    pids+=("$1")
+                elif [[ -z "$timespan" ]] && [[ "$1" =~ ^[0-9]+[mhd]$ ]]; then
+                    timespan="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # 檢查必要參數
+    if [[ ${#pids[@]} -eq 0 ]]; then
+        echo -e "${RED}❌ 請指定至少一個PID${NC}"
+        echo "使用方法: $0 plot-processes PID1 PID2 [時間範圍] [選項]"
+        echo "範例: $0 plot-processes 1234 5678 2h --database=server2.db"
+        return 1
+    fi
+    
+    if [[ -z "$timespan" ]]; then
+        timespan="1h"
+        echo -e "${YELLOW}⚠️  未指定時間範圍，使用預設值: ${timespan}${NC}"
+    fi
+    
+    # 構建命令
+    local cmd="python src/system_monitor.py plot-processes ${pids[*]} $timespan"
+    
+    if [[ -n "$database" ]]; then
+        if [[ ! -f "$database" ]]; then
+            echo -e "${RED}❌ 資料庫檔案不存在: $database${NC}"
+            return 1
+        fi
+        cmd="$cmd --database=$database"
+        echo -e "${YELLOW}📊 使用資料庫: $database${NC}"
+    fi
+    
+    if [[ -n "$output" ]]; then
+        cmd="$cmd --output=$output"
+    fi
+    
+    echo -e "${BLUE}📊 繪製進程對比圖...${NC}"
+    echo -e "${YELLOW}   PIDs: ${pids[*]}${NC}"
+    echo -e "${YELLOW}   時間範圍: $timespan${NC}"
+    
+    eval $cmd
 }
 
 export_data() {
@@ -440,9 +532,9 @@ main() {
     # 檢查 Docker
     check_docker
     
-    # 處理命令
+    # 處理指令
     case "${1:-help}" in
-        # Docker 命令
+        # Docker 指令
         "start-web")
             start_web
             ;;
@@ -466,7 +558,7 @@ main() {
             enter_shell
             ;;
         
-        # 監控命令
+        # 監控指令
         "start")
             start_monitor
             ;;
@@ -481,7 +573,18 @@ main() {
             fi
             ;;
         "plot")
-            generate_plots $2
+            # 處理多資料庫參數
+            if [[ "$2" == --database=* ]]; then
+                generate_plots "24h" "${2#*=}"
+            elif [[ "$3" == --database=* ]]; then
+                generate_plots "$2" "${3#*=}"
+            else
+                generate_plots $2
+            fi
+            ;;
+        "plot-processes")
+            shift  # 移除 plot-processes 命令
+            plot_processes "$@"
             ;;
         "export")
             export_data $2
@@ -490,7 +593,7 @@ main() {
             cleanup_data $2
             ;;
         
-        # 維護命令
+        # 維護指令
         "build")
             build_image
             ;;

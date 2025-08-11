@@ -30,5 +30,5 @@ RUN chmod +x scripts/start_with_cleanup.sh
 ARG WEB_PORT=5000
 EXPOSE $WEB_PORT
 
-# 預設命令
+# 預設指令
 CMD ["python", "app.py", "status"]

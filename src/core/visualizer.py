@@ -135,18 +135,36 @@ class SystemMonitorVisualizer:
 
         with plt.style.context(self._dark_style_params):
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+            
+            # RAM 圖表
             if 'ram_used_gb' in df.columns and 'ram_total_gb' in df.columns:
                 ax1.plot(df['datetime'], df['ram_used_gb'], color=self.colors['ram'], linewidth=2, label='Used')
                 ax1.fill_between(df['datetime'], df['ram_used_gb'], alpha=0.3, color=self.colors['ram'])
+                
+                # 添加記憶體上限線
+                total_ram = df['ram_total_gb'].iloc[0] if 'ram_total_gb' in df.columns else 16.0
+                ax1.axhline(y=total_ram, color='red', linestyle='--', alpha=0.7, 
+                           label=f'Total Memory ({total_ram:.1f}GB)')
+                ax1.set_ylim(0, total_ram * 1.1)  # 給上限留點空間
+                
             ax1.set_title('RAM Usage (GB)', fontweight='bold')
             ax1.set_ylabel('Memory (GB)')
             ax1.legend()
             ax1.grid(True, alpha=0.3)
 
+            # VRAM 圖表  
             if 'vram_used_mb' in df.columns and df['vram_used_mb'].notna().any():
                 vram_used_gb = df['vram_used_mb'].fillna(0) / 1024
                 ax2.plot(df['datetime'], vram_used_gb, color=self.colors['vram'], linewidth=2, label='Used')
                 ax2.fill_between(df['datetime'], vram_used_gb, alpha=0.3, color=self.colors['vram'])
+                
+                # 添加VRAM上限線
+                if 'vram_total_mb' in df.columns:
+                    total_vram_gb = df['vram_total_mb'].iloc[0] / 1024 if df['vram_total_mb'].iloc[0] else 8.0
+                    ax2.axhline(y=total_vram_gb, color='red', linestyle='--', alpha=0.7,
+                               label=f'Total VRAM ({total_vram_gb:.1f}GB)')
+                    ax2.set_ylim(0, total_vram_gb * 1.1)
+                    
             else:
                 ax2.text(0.5, 0.5, 'VRAM Data Not Available', ha='center', va='center', transform=ax2.transAxes, fontsize=14, alpha=0.5)
             ax2.set_title('VRAM Usage (GB)', fontweight='bold')
@@ -255,9 +273,30 @@ class SystemMonitorVisualizer:
         df = pd.DataFrame(process_data)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp')
+        
+        # 獲取系統記憶體上限資訊
+        try:
+            import psutil
+            total_ram_gb = psutil.virtual_memory().total / (1024**3)
+        except:
+            # 備用方案：使用預設值
+            total_ram_gb = 16.0
+        
+        # 嘗試從數據中獲取GPU記憶體上限
+        total_vram_gb = 8.0  # 預設值
+        if not df.empty and 'raw_data' in df.columns:
+            try:
+                import json
+                for raw_data in df['raw_data'].dropna():
+                    data = json.loads(raw_data)
+                    if 'vram_total_mb' in data and data['vram_total_mb']:
+                        total_vram_gb = data['vram_total_mb'] / 1024
+                        break
+            except:
+                pass
 
         with plt.style.context(self._dark_style_params):
-            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 18), sharex=True)
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16), sharex=True)
             fig.suptitle(f'Processes Comparison ({timespan})', fontsize=16, fontweight='bold')
 
             colors = plt.cm.viridis(np.linspace(0, 1, len(pids)))
@@ -271,27 +310,89 @@ class SystemMonitorVisualizer:
                 label = f'PID {pid} ({process_name})'
                 color = colors[i]
 
-                ax1.plot(pid_data['timestamp'], pid_data['cpu_percent'], color=color, label=label, alpha=0.8)
-                ax2.plot(pid_data['timestamp'], pid_data['ram_mb'] / 1024, color=color, label=label, alpha=0.8)
-                ax3.plot(pid_data['timestamp'], pid_data['gpu_memory_mb'], color=color, label=label, alpha=0.8)
+                # CPU 使用率 - 限制在 0-100% 範圍
+                cpu_data = pid_data['cpu_percent'].clip(0, 100)
+                ax1.plot(pid_data['timestamp'], cpu_data, color=color, label=label, alpha=0.8)
+                
+                # GPU 使用率 - 從原始數據中提取，如果有的話
+                gpu_usage_data = None
+                if 'raw_data' in pid_data.columns:
+                    try:
+                        import json
+                        gpu_usage_list = []
+                        for raw_data in pid_data['raw_data']:
+                            if raw_data:
+                                data = json.loads(raw_data)
+                                gpu_usage = data.get('gpu_usage', 0) if isinstance(data, dict) else 0
+                                gpu_usage_list.append(max(0, min(100, gpu_usage)))  # 限制在0-100%
+                            else:
+                                gpu_usage_list.append(0)
+                        ax2.plot(pid_data['timestamp'], gpu_usage_list, color=color, label=label, alpha=0.8)
+                    except:
+                        ax2.plot(pid_data['timestamp'], [0] * len(pid_data), color=color, label=label, alpha=0.8)
+                else:
+                    ax2.plot(pid_data['timestamp'], [0] * len(pid_data), color=color, label=label, alpha=0.8)
+                
+                # RAM 使用量 - 轉換為 GB，確保非負值
+                ram_data = (pid_data['ram_mb'] / 1024).clip(lower=0)
+                ax3.plot(pid_data['timestamp'], ram_data, color=color, label=label, alpha=0.8)
+                
+                # GPU 記憶體 - 確保非負值，轉換為 GB
+                gpu_memory_data = pid_data['gpu_memory_mb'].clip(lower=0) / 1024
+                ax4.plot(pid_data['timestamp'], gpu_memory_data, color=color, label=label, alpha=0.8)
 
+            # CPU 使用率圖表 (左上)
             ax1.set_title('CPU Usage Comparison')
             ax1.set_ylabel('CPU (%)')
+            ax1.set_ylim(0, 100)  # CPU 使用率固定 0-100%
             ax1.legend()
             ax1.grid(True, alpha=0.3)
 
-            ax2.set_title('RAM Usage Comparison')
-            ax2.set_ylabel('RAM (GB)')
+            # GPU 使用率圖表 (右上)
+            ax2.set_title('GPU Usage Comparison') 
+            ax2.set_ylabel('GPU (%)')
+            ax2.set_ylim(0, 100)  # GPU 使用率固定 0-100%
             ax2.legend()
             ax2.grid(True, alpha=0.3)
 
-            ax3.set_title('GPU Memory Usage Comparison')
-            ax3.set_ylabel('GPU Memory (MB)')
+            # RAM 使用量圖表 (左下)
+            ax3.set_title('RAM Usage Comparison')
+            ax3.set_ylabel('RAM (GB)')
             ax3.set_xlabel('Time')
             ax3.legend()
             ax3.grid(True, alpha=0.3)
+            
+            # 添加記憶體上限參考線
+            ax3.axhline(y=total_ram_gb, color='red', linestyle='--', alpha=0.7, 
+                       label=f'System Memory Limit ({total_ram_gb:.1f}GB)')
+            ax3.legend()  # 重新設置圖例包含上限線
+            
+            # 設置Y軸範圍，確保從0開始
+            max_ram_used = max([max((df[df['pid'] == pid]['ram_mb'] / 1024).clip(lower=0)) 
+                               for pid in pids if not df[df['pid'] == pid].empty] + [1])
+            ax3.set_ylim(0, max(total_ram_gb * 1.1, max_ram_used * 1.2))
 
-            self._format_xaxis(ax3, (df['timestamp'].max() - df['timestamp'].min()).total_seconds())
+            # GPU 記憶體使用圖表 (右下)
+            ax4.set_title('GPU Memory Usage Comparison')
+            ax4.set_ylabel('GPU Memory (GB)')
+            ax4.set_xlabel('Time')
+            
+            # 添加GPU記憶體上限參考線
+            ax4.axhline(y=total_vram_gb, color='red', linestyle='--', alpha=0.7, 
+                       label=f'Total VRAM ({total_vram_gb:.1f}GB)')
+            
+            # 設置Y軸範圍，確保從0開始
+            max_vram_used = max([max((df[df['pid'] == pid]['gpu_memory_mb'].clip(lower=0) / 1024)) 
+                                for pid in pids if not df[df['pid'] == pid].empty] + [0.1])
+            ax4.set_ylim(0, max(total_vram_gb * 1.1, max_vram_used * 1.2))
+            
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+
+            # 格式化所有子圖的X軸
+            time_span_seconds = (df['timestamp'].max() - df['timestamp'].min()).total_seconds()
+            for ax in [ax1, ax2, ax3, ax4]:
+                self._format_xaxis(ax, time_span_seconds)
 
             plt.tight_layout(rect=[0, 0, 1, 0.96])
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

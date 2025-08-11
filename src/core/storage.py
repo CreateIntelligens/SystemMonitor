@@ -292,7 +292,7 @@ class MonitoringDatabase:
             end_time: 結束時間
             pid: 特定進程 ID
             process_name: 進程名稱過濾
-            command_filter: 命令過濾（支援模糊匹配）
+            command_filter: 指令過濾（支援模糊匹配）
             limit: 限制返回數量
             
         Returns:
@@ -472,6 +472,63 @@ class MonitoringDatabase:
                 
         except Exception as e:
             print(f"❌ 根據PID列表查詢進程數據失敗: {e}")
+            return []
+
+    def get_unique_processes_in_timespan(self, start_time: datetime, end_time: datetime) -> List[Dict]:
+        """
+        獲取時間範圍內的所有唯一進程（包括已結束的）
+        
+        Args:
+            start_time: 開始時間
+            end_time: 結束時間
+            
+        Returns:
+            進程資訊列表，包含PID、進程名稱、指令、最後活動時間等
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                query = """
+                    SELECT 
+                        pid,
+                        process_name,
+                        command,
+                        MAX(unix_timestamp) as last_seen,
+                        MIN(unix_timestamp) as first_seen,
+                        COUNT(*) as record_count,
+                        AVG(gpu_memory_mb) as avg_gpu_memory,
+                        AVG(cpu_percent) as avg_cpu_percent,
+                        AVG(ram_mb) as avg_ram_mb
+                    FROM gpu_processes 
+                    WHERE unix_timestamp >= ? AND unix_timestamp <= ?
+                    GROUP BY pid, process_name, command
+                    ORDER BY last_seen DESC
+                """
+                
+                cursor.execute(query, [start_time.timestamp(), end_time.timestamp()])
+                rows = cursor.fetchall()
+                
+                results = []
+                for row in rows:
+                    process_info = {
+                        'pid': row['pid'],
+                        'process_name': row['process_name'] or 'Unknown',
+                        'command': row['command'] or '',
+                        'last_seen': datetime.fromtimestamp(row['last_seen']).strftime('%Y-%m-%d %H:%M:%S'),
+                        'first_seen': datetime.fromtimestamp(row['first_seen']).strftime('%Y-%m-%d %H:%M:%S'),
+                        'record_count': row['record_count'],
+                        'avg_gpu_memory_mb': round(row['avg_gpu_memory'] or 0, 1),
+                        'avg_cpu_percent': round(row['avg_cpu_percent'] or 0, 1),
+                        'avg_ram_mb': round(row['avg_ram_mb'] or 0, 1),
+                        'status': 'running' if datetime.fromtimestamp(row['last_seen']) > datetime.now() - timedelta(minutes=5) else 'stopped'
+                    }
+                    results.append(process_info)
+                
+                return results
+                
+        except Exception as e:
+            print(f"❌ 獲取時間範圍內唯一進程失敗: {e}")
             return []
     
     def get_metrics_by_timespan(self, timespan: str) -> List[Dict]:
