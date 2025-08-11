@@ -281,6 +281,8 @@ class MonitoringDatabase:
                          start_time: Optional[datetime] = None,
                          end_time: Optional[datetime] = None,
                          pid: Optional[int] = None,
+                         process_name: Optional[str] = None,
+                         command_filter: Optional[str] = None,
                          limit: Optional[int] = None) -> List[Dict]:
         """
         查詢 GPU 進程數據
@@ -289,6 +291,8 @@ class MonitoringDatabase:
             start_time: 開始時間
             end_time: 結束時間
             pid: 特定進程 ID
+            process_name: 進程名稱過濾
+            command_filter: 命令過濾（支援模糊匹配）
             limit: 限制返回數量
             
         Returns:
@@ -313,6 +317,14 @@ class MonitoringDatabase:
                 if pid:
                     conditions.append("pid = ?")
                     params.append(pid)
+                
+                if process_name:
+                    conditions.append("process_name LIKE ?")
+                    params.append(f"%{process_name}%")
+                
+                if command_filter:
+                    conditions.append("command LIKE ?")
+                    params.append(f"%{command_filter}%")
                 
                 where_clause = ""
                 if conditions:
@@ -403,6 +415,63 @@ class MonitoringDatabase:
                 
         except Exception as e:
             print(f"❌ 查詢頂級 GPU 進程失敗: {e}")
+            return []
+
+    def get_processes_by_pids(self, pids: List[int], 
+                               start_time: Optional[datetime] = None,
+                               end_time: Optional[datetime] = None) -> List[Dict]:
+        """
+        根據PID列表和時間範圍查詢進程數據
+        
+        Args:
+            pids: PID 列表
+            start_time: 開始時間
+            end_time: 結束時間
+            
+        Returns:
+            進程數據列表
+        """
+        if not pids:
+            return []
+            
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 構建查詢條件
+                conditions = []
+                params = []
+                
+                if start_time:
+                    conditions.append("unix_timestamp >= ?")
+                    params.append(start_time.timestamp())
+                
+                if end_time:
+                    conditions.append("unix_timestamp <= ?")
+                    params.append(end_time.timestamp())
+                
+                # 處理 PID 列表
+                placeholders = ', '.join('?' for _ in pids)
+                conditions.append(f"pid IN ({placeholders})")
+                params.extend(pids)
+                
+                where_clause = "WHERE " + " AND ".join(conditions)
+                order_clause = "ORDER BY unix_timestamp ASC" # 時間升序，方便繪圖
+                
+                query = f"""
+                    SELECT * FROM gpu_processes 
+                    {where_clause} 
+                    {order_clause}
+                """
+                
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                
+                # 轉換為字典列表
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            print(f"❌ 根據PID列表查詢進程數據失敗: {e}")
             return []
     
     def get_metrics_by_timespan(self, timespan: str) -> List[Dict]:

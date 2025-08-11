@@ -5,61 +5,159 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系統監控</title>
     <style>
+        :root {
+            --bg-grad-start: #232526;
+            --bg-grad-end: #414345;
+            --card-bg: rgba(44, 47, 51, 0.85);
+            --card-border: rgba(255, 255, 255, 0.15);
+            --text-primary: #f0f0f0;
+            --text-secondary: #cccccc; /* 調亮次要文字顏色 */
+            --accent-grad-start: #11998e;
+            --accent-grad-end: #38ef7d;
+            --accent-shadow: rgba(17, 153, 142, 0.3);
+            --active-tab-bg: #f0f0f0;
+            --active-tab-text: #232526;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
-        .container { max-width: 1400px; margin: 0 auto; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: linear-gradient(135deg, var(--bg-grad-start) 0%, var(--bg-grad-end) 100%); 
+            color: var(--text-primary);
+            min-height: 100vh; 
+            padding: 20px; 
+        }
+        .container { max-width: 1600px; margin: 0 auto; }
         
-        .header { text-align: center; margin-bottom: 40px; color: white; }
-        .header h1 { font-size: 3rem; margin-bottom: 5px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
-        .header .host-info { font-size: 1rem; opacity: 0.8; margin-bottom: 10px; background: rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 20px; display: inline-block; }
-        .header .subtitle { font-size: 1.2rem; opacity: 0.9; margin-bottom: 15px; }
+        .header { 
+            display: flex; 
+            flex-wrap: wrap;
+            justify-content: space-between; 
+            align-items: center; 
+            text-align: left;
+            margin-bottom: 40px; 
+            color: var(--text-primary); 
+        }
+        .header-left { flex: 1; }
+        .header-right { flex-shrink: 0; text-align: right; }
+        .header h1 { font-size: 2.5rem; margin-bottom: 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); display: inline-block; margin-right: 20px; }
+        .header .host-info { font-size: 1rem; opacity: 0.8; background: rgba(0,0,0,0.2); padding: 8px 16px; border-radius: 20px; display: inline-block; }
+        .header .subtitle { font-size: 1.1rem; opacity: 0.9; margin-top: 5px; }
         
         .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 25px; margin-bottom: 40px; }
-        .status-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); padding: 25px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); border: 1px solid rgba(255,255,255,0.2); transition: transform 0.3s ease, box-shadow 0.3s ease; }
-        .status-card:hover { transform: translateY(-5px); box-shadow: 0 12px 40px rgba(0,0,0,0.15); }
-        .status-card h3 { color: #333; margin-bottom: 20px; font-size: 1.3rem; display: flex; align-items: center; gap: 10px; }
-        .metric { display: flex; justify-content: space-between; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        .status-card { 
+            background: var(--card-bg);
+            backdrop-filter: blur(15px);
+            padding: 25px; 
+            border-radius: 20px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+            border: 1px solid var(--card-border);
+            transition: transform 0.3s ease, box-shadow 0.3s ease; 
+        }
+        .status-card:hover { transform: translateY(-5px); box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
+        .status-card h3 { color: var(--text-primary); margin-bottom: 20px; font-size: 1.4rem; display: flex; align-items: center; gap: 10px; }
+        .metric { display: flex; justify-content: space-between; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1); font-size: 1.05rem; /* 放大指標字體 */}
         .metric:last-child { border-bottom: none; }
-        .metric span:first-child { color: #666; font-weight: 500; }
-        .metric span:last-child { font-weight: 700; color: #333; }
+        .metric span:first-child { color: var(--text-secondary); font-weight: 500; }
+        .metric span:last-child { font-weight: 700; color: var(--text-primary); font-size: 1.1rem; /* 放大數值字體 */ }
         
-        .buttons { text-align: center; margin: 40px 0; }
-        .btn { display: inline-block; padding: 15px 30px; margin: 0 15px 15px 0; background: linear-gradient(45deg, #007bff, #0056b3); color: white; text-decoration: none; border-radius: 25px; border: none; cursor: pointer; font-size: 1.1rem; font-weight: 600; transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(0,123,255,0.3); }
-        .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,123,255,0.4); }
-        .btn.success { background: linear-gradient(45deg, #28a745, #20c997); box-shadow: 0 4px 15px rgba(40,167,69,0.3); }
-        .btn.success:hover { box-shadow: 0 8px 25px rgba(40,167,69,0.4); }
-        .btn.warning { background: linear-gradient(45deg, #ffc107, #fd7e14); color: #333; box-shadow: 0 4px 15px rgba(255,193,7,0.3); }
-        .btn.warning:hover { box-shadow: 0 8px 25px rgba(255,193,7,0.4); }
+        .btn { 
+            display: inline-block; padding: 15px 30px; margin: 0 15px 15px 0; 
+            color: white; text-decoration: none; 
+            border-radius: 25px; border: none; cursor: pointer; 
+            font-size: 1.1rem; font-weight: 600; 
+            transition: all 0.3s ease; 
+            box-shadow: 0 4px 15px var(--accent-shadow);
+            background: linear-gradient(45deg, var(--accent-grad-start), var(--accent-grad-end));
+        }
+        .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 25px var(--accent-shadow); }
         
         .chart-controls { display: flex; justify-content: center; align-items: center; gap: 15px; margin: 40px 0; }
         .time-selector { position: relative; }
-        .time-input { padding: 12px 20px; border: 2px solid rgba(255,255,255,0.3); border-radius: 25px; background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: white; font-size: 1rem; width: 200px; }
-        .time-input::placeholder { color: rgba(255,255,255,0.7); }
-        .time-input:focus { outline: none; border-color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.2); }
-        .dropdown { position: absolute; top: 100%; left: 0; right: 0; background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); margin-top: 5px; z-index: 1000; max-height: 200px; overflow-y: auto; display: none; }
-        .dropdown-item { padding: 10px 15px; cursor: pointer; color: #333; transition: background 0.2s; }
-        .dropdown-item:hover { background: rgba(0,123,255,0.1); }
-        .live-indicator { display: flex; align-items: center; gap: 8px; color: white; font-weight: 600; }
-        .live-dot { width: 10px; height: 10px; background: #28a745; border-radius: 50%; animation: pulse 2s infinite; }
+        .time-input { padding: 12px 20px; border: 2px solid rgba(255,255,255,0.2); border-radius: 25px; background: rgba(0,0,0,0.2); backdrop-filter: blur(10px); color: white; font-size: 1rem; width: 200px; }
+        .time-input::placeholder { color: rgba(255,255,255,0.6); }
+        .time-input:focus { outline: none; border-color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.3); }
+        .dropdown { position: absolute; top: 100%; left: 0; right: 0; background: #3c3f41; backdrop-filter: blur(20px); border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); margin-top: 5px; z-index: 1000; max-height: 200px; overflow-y: auto; display: none; border: 1px solid var(--card-border);}
+        .dropdown-item { padding: 10px 15px; cursor: pointer; color: var(--text-primary); transition: background 0.2s; }
+        .dropdown-item:hover { background: rgba(255,255,255,0.1); }
+        .live-indicator { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-weight: 600; }
+        .live-dot { width: 10px; height: 10px; background: var(--accent-grad-end); border-radius: 50%; animation: pulse 2s infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         
-        .loading { display: none; text-align: center; margin: 30px 0; color: white; }
+        .loading { display: none; text-align: center; margin: 30px 0; color: var(--text-primary); }
         .loading h3 { font-size: 1.5rem; margin-bottom: 10px; }
         
         .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 40px; }
-        .chart-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(20px); padding: 25px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); text-align: center; border: 1px solid rgba(255,255,255,0.2); transition: transform 0.3s ease; }
+        .chart-card { background: var(--card-bg); backdrop-filter: blur(15px); padding: 25px; border-radius: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); text-align: center; border: 1px solid var(--card-border); transition: transform 0.3s ease; }
         .chart-card:hover { transform: scale(1.02); }
-        .chart-card h4 { margin-bottom: 15px; color: #333; font-size: 1.2rem; }
+        .chart-card h4 { margin-bottom: 15px; color: var(--text-primary); font-size: 1.2rem; }
         .chart-card img { max-width: 100%; height: auto; border-radius: 10px; cursor: pointer; transition: transform 0.3s ease; }
         .chart-card img:hover { transform: scale(1.05); }
         
-        .gpu-processes-container { background: rgba(255,255,255,0.9); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-top: 40px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); color: #333; }
-        .gpu-processes-container h3 { font-size: 1.5rem; margin-bottom: 20px; }
-        .process-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-        .process-table th, .process-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid rgba(0,0,0,0.1); }
-        .process-table thead th { background-color: rgba(0,0,0,0.05); font-weight: 600; }
-        .process-table tbody tr:hover { background-color: rgba(0,0,0,0.03); }
+        .gpu-processes-container { background: var(--card-bg); backdrop-filter: blur(15px); border-radius: 15px; padding: 25px; margin-top: 40px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); color: var(--text-primary); }
+        .gpu-processes-container h3 { font-size: 1.6rem; margin-bottom: 20px; }
+        .process-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+        .process-table th, .process-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .process-table thead th { background-color: rgba(255,255,255,0.1); font-weight: 600; }
+        .process-table tbody tr:hover { background-color: rgba(255,255,255,0.05); }
         .command-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* Tab Styles */
+        .tab-btn.active { background: var(--active-tab-bg) !important; color: var(--active-tab-text) !important; }
+        .tab-btn { transition: all 0.3s ease; }
+
+        /* Filter Panel */
+        #processPanel > div:first-child { background: var(--card-bg); color: var(--text-primary); }
+        #processPanel h3 { color: var(--text-primary) !important; /* 強制標題為淺色 */ }
+        #filter-value-input.form-control { background-color: rgba(0,0,0,0.3) !important; color: var(--text-primary) !important; /* 強制輸入框為深色底淺色字 */ }
+        #processPanel input[type="text"]::placeholder { color: var(--text-secondary); }
+        #processPanel .quick-filter-btn { background: #4a4a4a; border: 1px solid #666; color: var(--text-primary); cursor: pointer; padding: 8px 16px; border-radius: 20px;}
+
+        .form-control {
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--card-border);
+            color: var(--text-primary);
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .form-control:focus { outline: none; border-color: var(--accent-grad-start); }
+
+        /* 修正下拉選單在白底下的文字顏色 */
+        #filter-type-select option {
+            background: white;
+            color: black;
+        }
+
+        /* 強制修正下拉選單的可讀性問題 */
+        select.form-control {
+            background-color: #f0f0f0; /* 淺色背景 */
+            color: #333; /* 深色文字 */
+        }
+
+        /* Filter Pills */
+        .filter-pill {
+            display: inline-flex;
+            align-items: center;
+            background: var(--accent-grad-start);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 16px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .filter-pill .close-btn {
+            margin-left: 8px;
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 1.2rem;
+            font-weight: bold;
+            padding: 0;
+            line-height: 1;
+        }
+        .filter-pill .close-btn:hover { opacity: 0.8; }
 
         @media (max-width: 768px) {
             .header h1 { font-size: 2rem; }
@@ -73,26 +171,26 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🖥️ 系統監控</h1>
-            <div class="host-info" id="hostInfo">
-                <span id="hostname">載入中...</span>
+            <div class="header-left">
+                <h1 class="h1">🖥️ 系統監控</h1>
+                <div class="host-info" id="hostInfo">
+                    <span id="hostname">載入中...</span>
+                </div>
+                <div class="subtitle">實時系統狀態監控與分析</div>
             </div>
-            <div class="subtitle">實時系統狀態監控與分析</div>
         </div>
-        
+
+        <!-- 系統狀態 -->
         <div class="status-grid" id="statusGrid">
-            <div class="status-card">
-                <h3>📊 載入中...</h3>
-                <p>正在獲取系統狀態...</p>
-            </div>
+            <!-- Status cards will be loaded here -->
         </div>
         
+        <!-- 系統圖表控制項 -->
         <div class="chart-controls">
             <div class="live-indicator">
                 <div class="live-dot"></div>
                 <span>實時監控</span>
             </div>
-            
             <div class="time-selector">
                 <input type="text" class="time-input" id="timeRange" placeholder="選擇時間範圍..." 
                        onfocus="showDropdown()" onblur="hideDropdown()" oninput="filterDropdown()">
@@ -108,18 +206,37 @@
                     <div class="dropdown-item" onclick="selectTime('7d')">7 天</div>
                 </div>
             </div>
-            
-            <button class="btn success" onclick="generateSelectedChart()">📊 生成圖表</button>
+            <button class="btn" onclick="generateSelectedChart()">📊 系統圖表</button>
         </div>
-        
-        <div class="gpu-processes-container" id="gpuProcessesContainer"></div>
-        
-        <div class="loading" id="loading">
-            <h3>⏳ 正在生成圖表...</h3>
-            <p>請稍候，這可能需要幾秒鐘...</p>
-        </div>
-        
+        <div class="loading" id="loading" style="display: none;"><h3>⏳ 正在生成圖表...</h3></div>
         <div class="charts-grid" id="chartsGrid"></div>
+
+        <!-- 分隔線 -->
+        <hr style="border-color: rgba(255,255,255,0.2); margin: 50px 0;">
+
+        <!-- 進程分析區 -->
+        <div id="process-analysis-section">
+            <div class="filter-panel" style="background: var(--card-bg); padding: 30px; border-radius: 20px; margin-bottom: 30px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 style="margin: 0; color: var(--text-primary) !important;">🔍 進程搜尋與分析</h3>
+                    <button id="plot-selected-btn" class="btn" style="padding: 10px 15px; font-size: 0.9rem; margin: 0;">繪製選定進程圖表</button>
+                </div>
+                <div class="add-filter-controls" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
+                    <select id="filter-type-select" class="form-control" style="flex: 1;">
+                        <option value="name">進程名</option>
+                        <option value="pid">PID</option>
+                        <option value="cmd">命令</option>
+                        <option value="ram_gt">RAM 大於 (MB)</option>
+                        <option value="gpu_gt">GPU記憶體 大於 (MB)</option>
+                    </select>
+                    <input type="text" id="filter-value-input" class="form-control" placeholder="輸入篩選數值..." style="flex: 2;">
+                    <button id="add-filter-btn" class="btn" style="padding: 12px 20px; font-size: 1rem; margin: 0;">新增</button>
+                </div>
+                <div id="filter-pills-container" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; min-height: 38px;"></div>
+            </div>
+            <div id="filteredProcessList" class="gpu-processes-container"></div>
+            <div id="process-chart-container" class="charts-grid" style="margin-top: 20px;"></div>
+        </div>
     </div>
     
     <script src="/static/js/app.js"></script>

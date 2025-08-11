@@ -15,9 +15,9 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - HOST_PROC=/host/proc
       - HOST_SYS=/host/sys
-      - WEB_PORT=${WEB_PORT:-5000}
+      - WEB_PORT=${WEB_PORT:-9090}
     ports:
-      - "${WEB_PORT:-5000}:${WEB_PORT:-5000}"
+      - "${WEB_PORT:-9090}:${WEB_PORT:-9090}"
     privileged: true
     pid: host
     deploy:

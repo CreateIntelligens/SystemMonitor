@@ -172,7 +172,8 @@ class GPUCollector:
             if result.returncode == 0:
                 output = result.stdout
                 in_processes_section = False
-                proc_line_regex = re.compile(r"^\|\s+\d+\s+N/A\s+N/A\s+(\d+)\s+([GgCc])\s+(.+?)\s+(\d+|N/A)\s*\|$")
+                # 支援新版 nvidia-smi 格式: |    0   N/A  N/A         1306310      C   python                                10028MiB |
+                proc_line_regex = re.compile(r"^\|\s*\d+\s+N/A\s+N/A\s+(\d+)\s+([GgCc])\s+(.+?)\s+(\d+)MiB\s*\|$")
 
                 for line in output.split('\n'):
                     if line.startswith('| Processes:'):
@@ -181,14 +182,15 @@ class GPUCollector:
                     if not in_processes_section or not line.startswith('|'):
                         continue
                     
+                    
                     match = proc_line_regex.match(line.strip())
                     if match:
                         try:
                             pid = int(match.group(1))
                             proc_type = match.group(2).upper()
                             proc_name = match.group(3).strip()
-                            mem_usage_str = match.group(4) if len(match.groups()) >= 4 else 'N/A'
-                            gpu_memory_mb = int(mem_usage_str) if mem_usage_str != 'N/A' else 0
+                            mem_usage_str = match.group(4) if len(match.groups()) >= 4 else '0'
+                            gpu_memory_mb = int(mem_usage_str) if mem_usage_str.isdigit() else 0
 
                             if psutil.pid_exists(pid):
                                 p = psutil.Process(pid)

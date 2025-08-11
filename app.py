@@ -17,6 +17,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from pydantic import BaseModel
+from typing import List
 
 from core import SystemMonitorCollector, MonitoringDatabase, SystemMonitorVisualizer
 from utils import Config
@@ -43,10 +45,17 @@ collector = SystemMonitorCollector()
 database = MonitoringDatabase(config.database_path)
 visualizer = SystemMonitorVisualizer()
 
+class PlotProcessesRequest(BaseModel):
+    pids: List[int]
+    timespan: str = "1h"
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """主頁面"""
     return templates.TemplateResponse("index.html", {"request": request})
+
+
 
 @app.get("/api/status")
 async def get_status():
@@ -147,6 +156,108 @@ async def get_gpu_processes():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/plot/processes")
+async def plot_multiple_processes(req: PlotProcessesRequest):
+    """為多個指定PID生成對比圖表"""
+    try:
+        from datetime import datetime, timedelta
+
+        # 1. 計算時間範圍
+        now = datetime.now()
+        if req.timespan.endswith('h'):
+            hours = int(req.timespan[:-1])
+            start_time = now - timedelta(hours=hours)
+        elif req.timespan.endswith('d'):
+            days = int(req.timespan[:-1])
+            start_time = now - timedelta(days=days)
+        else:
+            start_time = now - timedelta(hours=1) # 預設1小時
+
+        # 2. 從資料庫獲取所有選定PID的數據
+        process_data = database.get_processes_by_pids(req.pids, start_time, now)
+
+        if not process_data:
+            return {"success": False, "error": f"在指定時間範圍內沒有找到任何選定PID的數據。"}
+
+        # 3. 調用 visualizer 生成圖表
+        chart_path = visualizer.plot_process_comparison(process_data, req.pids, req.timespan)
+
+        return {
+            "success": True,
+            "chart": {
+                "title": f"進程對比圖 ({len(req.pids)} 個進程)",
+                "path": Path(chart_path).name
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": f"生成圖表時發生錯誤: {e}"}
+
+
+@app.post("/api/plot/process/{timespan}")
+async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks, 
+                               process_name: str = None, command_filter: str = None,
+                               pid: int = None, group_by_pid: bool = True):
+    """生成進程特定圖表API"""
+    try:
+        from datetime import datetime, timedelta
+        
+        # 計算時間範圍
+        now = datetime.now()
+        if timespan.endswith('h'):
+            hours = int(timespan[:-1])
+            start_time = now - timedelta(hours=hours)
+        elif timespan.endswith('d'):
+            days = int(timespan[:-1])
+            start_time = now - timedelta(days=days)
+        else:
+            start_time = now - timedelta(hours=24)
+        
+        # 獲取進程數據
+        process_data = database.get_gpu_processes(
+            start_time=start_time,
+            end_time=now,
+            pid=pid,
+            process_name=process_name,
+            command_filter=command_filter
+        )
+        
+        if not process_data:
+            filter_desc = []
+            if pid: filter_desc.append(f"PID {pid}")
+            if process_name: filter_desc.append(f"進程名 '{process_name}'")
+            if command_filter: filter_desc.append(f"命令 '{command_filter}'")
+            filter_str = ", ".join(filter_desc) if filter_desc else "所有條件"
+            return {"success": False, "error": f"沒有找到匹配 {filter_str} 的進程數據"}
+        
+        # 生成進程圖表
+        if pid:
+            filter_name = f"PID {pid}"
+        elif process_name and command_filter:
+            filter_name = f"{process_name} ({command_filter})"
+        elif process_name:
+            filter_name = process_name
+        elif command_filter:
+            filter_name = command_filter
+        else:
+            filter_name = "All Processes"
+            
+        chart_path = visualizer.plot_process_timeline(
+            process_data, 
+            process_name=filter_name, 
+            timespan=timespan,
+            group_by_pid=group_by_pid
+        )
+        
+        return {
+            "success": True, 
+            "chart": {"title": f"Process Timeline: {filter_name}", 
+                     "path": Path(chart_path).relative_to("plots")},
+            "data_count": len(process_data)
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # 靜態文件服務
 app.mount("/plots", StaticFiles(directory="plots"), name="plots")
