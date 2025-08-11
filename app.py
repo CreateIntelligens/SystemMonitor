@@ -156,7 +156,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="系統監控 Web 界面")
     parser.add_argument('--host', default='0.0.0.0', help='綁定主機地址')
-    parser.add_argument('--port', type=int, default=5000, help='綁定端口')
+    parser.add_argument('--port', type=int, default=int(os.getenv('WEB_PORT', 5000)), help='綁定端口')
     
     args = parser.parse_args()
     

@@ -53,6 +53,14 @@
         .chart-card img { max-width: 100%; height: auto; border-radius: 10px; cursor: pointer; transition: transform 0.3s ease; }
         .chart-card img:hover { transform: scale(1.05); }
         
+        .gpu-processes-container { background: rgba(255,255,255,0.9); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin-top: 40px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); color: #333; }
+        .gpu-processes-container h3 { font-size: 1.5rem; margin-bottom: 20px; }
+        .process-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .process-table th, .process-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid rgba(0,0,0,0.1); }
+        .process-table thead th { background-color: rgba(0,0,0,0.05); font-weight: 600; }
+        .process-table tbody tr:hover { background-color: rgba(0,0,0,0.03); }
+        .command-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
         @media (max-width: 768px) {
             .header h1 { font-size: 2rem; }
             .status-grid { grid-template-columns: 1fr; }
@@ -102,8 +110,9 @@
             </div>
             
             <button class="btn success" onclick="generateSelectedChart()">📊 生成圖表</button>
-            <button class="btn warning" onclick="showGpuProcesses()">🎮 GPU進程</button>
         </div>
+        
+        <div class="gpu-processes-container" id="gpuProcessesContainer"></div>
         
         <div class="loading" id="loading">
             <h3>⏳ 正在生成圖表...</h3>

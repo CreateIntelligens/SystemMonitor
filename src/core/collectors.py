@@ -12,6 +12,10 @@ import time
 import requests
 from datetime import datetime
 from typing import Dict, Optional, List
+try:
+    import docker
+except ImportError:
+    docker = None
 
 
 class GPUCollector:
@@ -19,6 +23,68 @@ class GPUCollector:
     
     def __init__(self):
         self.gpu_available = self._check_nvidia_smi()
+        self.docker_client = self._init_docker_client()
+    
+    def _init_docker_client(self):
+        """初始化Docker客戶端"""
+        if docker is None:
+            return None
+        
+        # 嘗試多種連接方式
+        connection_attempts = [
+            lambda: docker.from_env(),
+            lambda: docker.DockerClient(base_url='unix://var/run/docker.sock'),
+            lambda: docker.DockerClient(base_url='npipe:////./pipe/docker_engine'),  # Windows
+            lambda: docker.DockerClient(base_url='tcp://host.docker.internal:2375'),
+        ]
+        
+        for attempt in connection_attempts:
+            try:
+                client = attempt()
+                # 測試連接
+                client.ping()
+                print(f"[DEBUG] Docker客戶端連接成功: {client.api.base_url}")
+                return client
+            except Exception as e:
+                continue
+                
+        print("[WARNING] 無法連接到Docker API，將無法識別容器來源")
+        return None
+    
+    def _get_container_process_map(self) -> Dict[int, Dict]:
+        """獲取容器進程映射表 (PID -> 容器信息)"""
+        container_map = {}
+        if not self.docker_client:
+            return container_map
+        
+        try:
+            containers = self.docker_client.containers.list()
+            for container in containers:
+                try:
+                    # 獲取容器內的進程
+                    processes = container.top()['Processes']
+                    container_info = {
+                        'name': container.name,
+                        'image': container.image.tags[0] if container.image.tags else 'unknown',
+                        'status': container.status
+                    }
+                    
+                    # 解析進程信息
+                    for process in processes:
+                        if len(process) >= 2:
+                            try:
+                                pid = int(process[1])  # 通常PID在第二列
+                                container_map[pid] = container_info
+                            except (ValueError, IndexError):
+                                continue
+                                
+                except Exception:
+                    continue
+                    
+        except Exception:
+            pass
+            
+        return container_map
     
     def _check_nvidia_smi(self) -> bool:
         """檢查 nvidia-smi 是否可用"""
@@ -84,76 +150,105 @@ class GPUCollector:
         except (subprocess.TimeoutExpired, subprocess.SubprocessError):
             return None
     
+    
+
     def get_gpu_processes(self) -> Optional[List[Dict]]:
-        """獲取 GPU 進程信息"""
+        """獲取 GPU 進程的混合方法。
+        1. 主要方法: 解析 nvidia-smi 的完整輸出，獲取詳細進程信息。
+        2. 備用方法: 掃描系統進程列表，查找可能使用 GPU 的進程關鍵字。
+        3. 新增: 整合Docker容器信息，識別進程來源。
+        """
         if not self.gpu_available:
             return None
+
+        processes = {}
         
+        # 獲取容器進程映射
+        container_map = self._get_container_process_map()
+
+        # 1. 主要方法: nvidia-smi
         try:
-            # 查詢計算應用程序進程
-            cmd = [
-                'nvidia-smi',
-                '--query-compute-apps=pid,process_name,gpu_uuid,used_gpu_memory',
-                '--format=csv,noheader,nounits'
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            
-            if result.returncode != 0:
-                return None
-            
-            processes = []
-            lines = result.stdout.strip().split('\n')
-            
-            for line in lines:
-                if not line.strip():
+            result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=10, encoding='utf-8')
+            if result.returncode == 0:
+                output = result.stdout
+                in_processes_section = False
+                proc_line_regex = re.compile(r"^\|\s+\d+\s+N/A\s+N/A\s+(\d+)\s+([GgCc])\s+(.+?)\s+(\d+|N/A)\s*\|$")
+
+                for line in output.split('\n'):
+                    if line.startswith('| Processes:'):
+                        in_processes_section = True
+                        continue
+                    if not in_processes_section or not line.startswith('|'):
+                        continue
+                    
+                    match = proc_line_regex.match(line.strip())
+                    if match:
+                        try:
+                            pid = int(match.group(1))
+                            proc_type = match.group(2).upper()
+                            proc_name = match.group(3).strip()
+                            mem_usage_str = match.group(4) if len(match.groups()) >= 4 else 'N/A'
+                            gpu_memory_mb = int(mem_usage_str) if mem_usage_str != 'N/A' else 0
+
+                            if psutil.pid_exists(pid):
+                                p = psutil.Process(pid)
+                                
+                                # 檢查是否為容器進程
+                                container_info = container_map.get(pid, None)
+                                container_name = container_info['name'] if container_info else 'Host'
+                                container_source = f"{container_info['name']} ({container_info['image']})" if container_info else '主機'
+                                
+                                processes[pid] = {
+                                    'pid': pid, 
+                                    'name': p.name(),
+                                    'command': ' '.join(p.cmdline()) if p.cmdline() else proc_name,
+                                    'gpu_memory_mb': gpu_memory_mb,
+                                    'cpu_percent': round(p.cpu_percent(), 1),
+                                    'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
+                                    'start_time': datetime.fromtimestamp(p.create_time()).strftime('%H:%M:%S'),
+                                    'type': f'NVIDIA {"Graphics" if proc_type == "G" else "Compute"}',
+                                    'container': container_name,
+                                    'container_source': container_source
+                                }
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+                            continue
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            pass # 主要方法失敗也沒關係，繼續執行備用方法
+
+        # 2. 備用方法: 關鍵字掃描
+        try:
+            gpu_keywords = ['torch', 'cuda', 'tensorflow', 'uvr5', 'ncnn']
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'cpu_percent', 'memory_info', 'create_time']):
+                if proc.info['pid'] in processes: # 如果主要方法已經找到了，就跳過
                     continue
                 
-                parts = [part.strip() for part in line.split(',')]
-                if len(parts) >= 4:
-                    try:
-                        pid = int(parts[0]) if parts[0] != 'N/A' else 0
-                        process_name = parts[1] if parts[1] != 'N/A' else 'Unknown'
-                        gpu_uuid = parts[2] if parts[2] != 'N/A' else ''
-                        used_memory = int(parts[3]) if parts[3] != 'N/A' else 0
-                        
-                        # 嘗試獲取更多進程信息
-                        try:
-                            if pid > 0 and psutil.pid_exists(pid):
-                                process = psutil.Process(pid)
-                                cmd_line = ' '.join(process.cmdline()[:3]) if process.cmdline() else process_name
-                                cpu_percent = process.cpu_percent()
-                                memory_mb = process.memory_info().rss / (1024 * 1024)
-                                create_time = datetime.fromtimestamp(process.create_time()).strftime('%H:%M:%S')
-                            else:
-                                cmd_line = process_name
-                                cpu_percent = 0
-                                memory_mb = 0
-                                create_time = 'N/A'
-                        except:
-                            cmd_line = process_name
-                            cpu_percent = 0
-                            memory_mb = 0
-                            create_time = 'N/A'
-                        
-                        processes.append({
-                            'pid': pid,
-                            'name': process_name,
-                            'command': cmd_line,
-                            'gpu_uuid': gpu_uuid,
-                            'gpu_memory_mb': used_memory,
-                            'cpu_percent': round(cpu_percent, 1),
-                            'ram_mb': round(memory_mb, 1),
-                            'start_time': create_time
-                        })
-                        
-                    except (ValueError, IndexError):
-                        continue
-            
-            return processes if processes else None
-            
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            return None
+                cmd_line = ' '.join(proc.info['cmdline'] or [])
+                if any(keyword in cmd_line.lower() for keyword in gpu_keywords):
+                    p = psutil.Process(proc.info['pid'])
+                    
+                    # 檢查是否為容器進程
+                    container_info = container_map.get(p.pid, None)
+                    container_name = container_info['name'] if container_info else 'Host'
+                    container_source = f"{container_info['name']} ({container_info['image']})" if container_info else '主機'
+                    
+                    processes[p.pid] = {
+                        'pid': p.pid, 
+                        'name': p.name(),
+                        'command': cmd_line,
+                        'gpu_memory_mb': 0, # 無法從此方法得知
+                        'cpu_percent': round(p.cpu_percent(), 1),
+                        'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
+                        'start_time': datetime.fromtimestamp(p.create_time()).strftime('%H:%M:%S'),
+                        'type': 'Potential GPU (Keyword)',
+                        'container': container_name,
+                        'container_source': container_source
+                    }
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+        return list(processes.values()) if processes else None
+    
+    
     
     def get_top_gpu_processes(self, limit: int = 10) -> Optional[List[Dict]]:
         """獲取佔用 GPU 最多的進程"""

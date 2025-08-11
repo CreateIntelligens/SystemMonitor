@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     htop \
     procps \
+    cron \
     && rm -rf /var/lib/apt/lists/*
 
 # 創建工作目錄
@@ -21,10 +22,13 @@ COPY requirements.txt .
 # 安裝 Python 依賴
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 不需要創建目錄，整個專案都會掛載
+# 複製並設置腳本權限
+COPY scripts/start_with_cleanup.sh scripts/
+RUN chmod +x scripts/start_with_cleanup.sh
 
-# 暴露 Web 介面端口
-EXPOSE 5000
+# 暴露 Web 介面端口（可透過環境變數調整）
+ARG WEB_PORT=5000
+EXPOSE $WEB_PORT
 
 # 預設命令
 CMD ["python", "app.py", "status"]

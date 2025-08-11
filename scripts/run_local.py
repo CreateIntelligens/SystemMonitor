@@ -12,31 +12,31 @@ def check_python():
     """檢查 Python 環境"""
     version = sys.version_info
     if version.major < 3 or (version.major == 3 and version.minor < 8):
-        print("❌ 需要 Python 3.8+")
+        print("需要 Python 3.8+")
         return False
-    print(f"✅ Python {version.major}.{version.minor}.{version.micro}")
+    print(f"Python {version.major}.{version.minor}.{version.micro}")
     return True
 
 def install_dependencies():
     """安裝依賴"""
-    print("📦 檢查依賴...")
+    print("檢查依賴...")
     
     try:
         import fastapi, uvicorn, psutil, pandas, matplotlib
-        print("✅ 核心依賴已安裝")
+        print("核心依賴已安裝")
         return True
     except ImportError as e:
-        print(f"⚠️  缺少依賴: {e}")
+        print(f"缺少依賴: {e}")
         
         choice = input("是否自動安裝依賴? (y/N): ").strip().lower()
         if choice in ['y', 'yes']:
-            print("🔄 安裝依賴中...")
+            print("安裝依賴中...")
             try:
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-                print("✅ 依賴安裝完成")
+                print("依賴安裝完成")
                 return True
             except subprocess.CalledProcessError:
-                print("❌ 依賴安裝失敗")
+                print("依賴安裝失敗")
                 return False
         else:
             print("💡 請手動執行: pip install -r requirements.txt")
@@ -57,7 +57,7 @@ def check_gpu():
     return False
 
 def main():
-    print("🚀 系統監控工具 - 本機運行")
+    print("系統監控工具 - 本機運行")
     print("=" * 40)
     
     # 檢查 Python

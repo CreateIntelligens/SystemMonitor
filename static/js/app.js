@@ -35,7 +35,7 @@ function updateStatusDisplay(data) {
         <div class="status-card">
             <h3>🎮 ${data.system_info?.gpu_name || 'GPU'}</h3>
             <div class="metric"><span>使用率</span><span>${data.gpu_usage ? data.gpu_usage.toFixed(1) + '%' : 'N/A'}</span></div>
-            <div class="metric"><span>VRAM使用</span><span>${data.vram_used_mb ? Math.round(data.vram_used_mb/1024*10)/10 + 'GB' : 'N/A'} / ${data.vram_total_mb ? Math.round(data.vram_total_mb/1024*10)/10 + 'GB' : 'N/A'}</span></div>
+            <div class="metric"><span>VRAM總用量</span><span title="Windows WDDM模式下無法顯示單個進程的GPU記憶體使用量">${data.vram_used_mb ? Math.round(data.vram_used_mb/1024*10)/10 + 'GB' : 'N/A'} / ${data.vram_total_mb ? Math.round(data.vram_total_mb/1024*10)/10 + 'GB' : 'N/A'}</span></div>
             <div class="metric"><span>溫度</span><span>${data.gpu_temperature ? data.gpu_temperature + '°C' : 'N/A'}</span></div>
         </div>
         <div class="status-card">
@@ -124,29 +124,68 @@ async function showGpuProcesses() {
     try {
         const response = await fetch('/api/gpu-processes');
         const data = await response.json();
-        
+        const container = document.getElementById('gpuProcessesContainer');
+
         if (data.current && data.current.length > 0) {
-            let html = '<h3>🎮 當前GPU進程</h3><table border="1" style="width:100%; border-collapse: collapse;"><tr><th>PID</th><th>進程名</th><th>GPU記憶體</th><th>CPU%</th></tr>';
-            data.current.forEach(proc => {
-                html += `<tr><td>${proc.pid}</td><td>${proc.name}</td><td>${proc.gpu_memory_mb}MB</td><td>${proc.cpu_percent}%</td></tr>`;
-            });
-            html += '</table>';
+            // Windows WDDM 模式說明
+            const isWindowsWDDM = data.current.some(proc => proc.gpu_memory_mb === 0 && (proc.type?.includes('NVIDIA') || proc.type?.includes('GPU')));
+            const wddmInfo = isWindowsWDDM ? 
+                `<div style="background: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107; padding: 10px; margin-bottom: 15px; border-radius: 4px;">
+                    <strong>📝 注意：</strong> Windows WDDM 模式下無法顯示單個進程的 GPU 記憶體使用量，只能顯示總使用量。
+                </div>` : '';
             
-            const newWindow = window.open('', '_blank', 'width=800,height=600');
-            newWindow.document.write(`<html><head><title>GPU進程</title></head><body>${html}</body></html>`);
+            let html = '<h3>🎮 當前GPU進程</h3>' + wddmInfo + '<table class="process-table"><thead><tr><th>PID</th><th>容器來源</th><th>進程名</th><th>指令</th><th>GPU記憶體</th><th>CPU %</th><th>RAM (MB)</th><th>啟動時間</th></tr></thead><tbody>';
+            
+            data.current.forEach(proc => {
+                // GPU記憶體顯示邏輯
+                let memoryDisplay;
+                if (proc.gpu_memory_mb > 0) {
+                    memoryDisplay = `${proc.gpu_memory_mb} MB`;
+                } else if (proc.type && (proc.type.includes('NVIDIA') || proc.type.includes('GPU'))) {
+                    // NVIDIA GPU進程，但Windows WDDM無法顯示個別進程記憶體
+                    memoryDisplay = '<span title="Windows WDDM模式無法顯示個別進程 GPU 記憶體">共享GPU</span>';
+                } else if (proc.type && proc.type.includes('Keyword')) {
+                    // 關鍵字識別的潛在GPU進程
+                    memoryDisplay = '<span title="通過關鍵字識別的潛在GPU進程">潛在GPU</span>';
+                } else {
+                    memoryDisplay = 'N/A';
+                }
+                
+                // 容器來源顯示
+                const containerSource = proc.container_source || proc.container || '主機';
+                const containerDisplay = containerSource === '主機' ? '主機' : containerSource;
+                
+                html += `<tr>
+                    <td>${proc.pid}</td>
+                    <td style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${containerDisplay}">${containerDisplay}</td>
+                    <td>${proc.name}</td>
+                    <td class="command-cell">${proc.command}</td>
+                    <td>${memoryDisplay}</td>
+                    <td>${proc.cpu_percent}%</td>
+                    <td>${proc.ram_mb}</td>
+                    <td>${proc.start_time}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
         } else {
-            alert('目前沒有GPU進程在運行');
+            container.innerHTML = '<h3>當前GPU進程</h3><p>目前沒有GPU進程在運行。</p>';
         }
     } catch (error) {
-        alert('獲取GPU進程資訊失敗');
+        const container = document.getElementById('gpuProcessesContainer');
+        container.innerHTML = '<h3>當前GPU進程</h3><p>獲取GPU進程資訊失敗。</p>';
     }
 }
 
 // 頁面載入時自動載入狀態
 window.onload = function() {
     loadStatus();
+    showGpuProcesses(); // 初始載入 GPU 進程
     // 每5秒自動更新一次狀態，實現實時監控
-    setInterval(loadStatus, 5000);
+    setInterval(() => {
+        loadStatus();
+        showGpuProcesses();
+    }, 5000);
     
     // 預設選擇 30 分鐘
     document.getElementById('timeRange').value = '30m';

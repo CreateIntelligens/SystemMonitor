@@ -28,7 +28,7 @@ class Config:
             'debug': False
         },
         'plots': {
-            'output_dir': 'data/plots',
+            'output_dir': 'plots',
             'default_timespan': '24h',
             'dpi': 300
         },
@@ -53,7 +53,7 @@ class Config:
         self.create_directories()
     
     def load_config(self):
-        """加載配置文件"""
+        """加載配置文件，環境變數優先"""
         config_path = Path(self.config_file)
         
         if config_path.exists():
@@ -70,6 +70,9 @@ class Config:
         else:
             print(f"ℹ️  配置文件不存在，使用預設配置")
             self.save_config()
+        
+        # 環境變數覆蓋配置（優先級最高）
+        self._load_env_overrides()
     
     def save_config(self):
         """保存配置到文件"""
@@ -139,6 +142,35 @@ class Config:
                 self._deep_merge(base[key], value)
             else:
                 base[key] = value
+    
+    def _load_env_overrides(self):
+        """從環境變數載入覆蓋配置"""
+        env_mappings = {
+            'WEB_PORT': 'web.port',
+            'WEB_HOST': 'web.host', 
+            'DATA_KEEP_DAYS': 'database.cleanup_days',
+            'PLOTS_KEEP_DAYS': 'plots.cleanup_days',
+            'MONITOR_INTERVAL': 'monitoring.interval',
+            'DB_PATH': 'database.path',
+            'PLOTS_DIR': 'plots.output_dir',
+            'LOG_LEVEL': 'logging.level'
+        }
+        
+        for env_var, config_key in env_mappings.items():
+            env_value = os.getenv(env_var)
+            if env_value is not None:
+                # 型別轉換
+                if config_key.endswith('.port') or config_key.endswith('_days') or config_key.endswith('.interval'):
+                    try:
+                        env_value = int(env_value)
+                    except ValueError:
+                        print(f"⚠️ 環境變數 {env_var} 值無效: {env_value}")
+                        continue
+                elif config_key.endswith('.debug') or config_key.endswith('.auto_cleanup'):
+                    env_value = env_value.lower() in ('true', '1', 'yes', 'on')
+                
+                self.set(config_key, env_value)
+                print(f"🔧 環境變數覆蓋: {config_key} = {env_value}")
     
     @property
     def database_path(self) -> str:

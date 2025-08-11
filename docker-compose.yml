@@ -9,12 +9,15 @@ services:
       - .:/app
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+      - /dev:/dev
+      - //var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - HOST_PROC=/host/proc
       - HOST_SYS=/host/sys
+      - WEB_PORT=${WEB_PORT:-5000}
     ports:
-      - "5000:5000"
+      - "${WEB_PORT:-5000}:${WEB_PORT:-5000}"
     privileged: true
     pid: host
     deploy:
@@ -24,8 +27,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # 使用新的啟動腳本，同時運行Web和監控（1秒間隔）
-    command: bash -c "python src/system_monitor.py monitor --interval 1 & python -m uvicorn app:app --host 0.0.0.0 --port 5000"
+    # 使用新的啟動腳本，同時運行Web、監控和自動清理
+    command: bash scripts/start_with_cleanup.sh
     restart: unless-stopped
     
   # 純監控服務（可選）
@@ -36,6 +39,8 @@ services:
       - .:/app
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+      - /dev:/dev
+      - //var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - HOST_PROC=/host/proc
@@ -53,3 +58,19 @@ services:
     restart: unless-stopped
     profiles:
       - monitoring-only
+      
+  # 自動清理服務
+  cleanup:
+    build: .
+    container_name: system_monitor_cleanup
+    volumes:
+      - .:/app
+    environment:
+      - TZ=Asia/Taipei
+    # 每天凌晨2點執行清理：清理7天前的資料，1天前的圖片
+    command: bash -c "while true; do python scripts/cleanup.py --data-days 7 --plots-days 1; sleep 86400; done"
+    restart: unless-stopped
+    depends_on:
+      - monitor
+    profiles:
+      - cleanup

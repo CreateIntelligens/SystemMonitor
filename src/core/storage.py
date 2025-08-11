@@ -460,21 +460,76 @@ class MonitoringDatabase:
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
                     
+                    # 清理 system_metrics
                     cursor.execute("""
                         DELETE FROM system_metrics 
                         WHERE unix_timestamp < ?
                     """, (cutoff_time.timestamp(),))
                     
-                    deleted_count = cursor.rowcount
+                    deleted_metrics = cursor.rowcount
+                    
+                    # 清理 gpu_processes
+                    cursor.execute("""
+                        DELETE FROM gpu_processes 
+                        WHERE unix_timestamp < ?
+                    """, (cutoff_time.timestamp(),))
+                    
+                    deleted_processes = cursor.rowcount
                     conn.commit()
                     
                     # 優化資料庫
                     cursor.execute("VACUUM")
                     
-                    return deleted_count
+                    total_deleted = deleted_metrics + deleted_processes
+                    print(f"✅ 已清理 {deleted_metrics} 條系統數據和 {deleted_processes} 條進程數據")
+                    
+                    return total_deleted
                     
         except Exception as e:
             print(f"❌ 清理數據失敗: {e}")
+            return 0
+    
+    def cleanup_old_plots(self, keep_days: int = 1, plots_dir: str = "plots") -> int:
+        """
+        清理舊圖片文件
+        
+        Args:
+            keep_days: 保留天數
+            plots_dir: 圖片目錄
+            
+        Returns:
+            刪除的文件數量
+        """
+        try:
+            plots_path = Path(plots_dir)
+            if not plots_path.exists():
+                print(f"⚠️ 圖片目錄不存在: {plots_path}")
+                return 0
+            
+            cutoff_time = datetime.now() - timedelta(days=keep_days)
+            deleted_count = 0
+            
+            # 遍歷所有子目錄
+            for subdir in plots_path.iterdir():
+                if subdir.is_dir():
+                    # 遍歷圖片文件
+                    for plot_file in subdir.glob("*.png"):
+                        try:
+                            # 獲取文件修改時間
+                            file_time = datetime.fromtimestamp(plot_file.stat().st_mtime)
+                            
+                            if file_time < cutoff_time:
+                                plot_file.unlink()
+                                deleted_count += 1
+                                print(f"🗑️ 已刪除舊圖片: {plot_file}")
+                        except Exception as e:
+                            print(f"⚠️ 刪除文件失敗: {plot_file} - {e}")
+            
+            print(f"✅ 已清理 {deleted_count} 張舊圖片")
+            return deleted_count
+            
+        except Exception as e:
+            print(f"❌ 清理圖片失敗: {e}")
             return 0
     
     def get_statistics(self) -> Dict:
