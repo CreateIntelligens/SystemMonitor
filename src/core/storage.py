@@ -521,7 +521,7 @@ class MonitoringDatabase:
                         'avg_gpu_memory_mb': round(row['avg_gpu_memory'] or 0, 1),
                         'avg_cpu_percent': round(row['avg_cpu_percent'] or 0, 1),
                         'avg_ram_mb': round(row['avg_ram_mb'] or 0, 1),
-                        'status': 'running' if datetime.fromtimestamp(row['last_seen']) > datetime.now() - timedelta(minutes=5) else 'stopped'
+                        'status': 'running' if datetime.fromtimestamp(row['last_seen']) > datetime.now() - timedelta(minutes=2) else 'stopped'
                     }
                     results.append(process_info)
                 

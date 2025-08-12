@@ -1,6 +1,8 @@
 // 全域變數
 let allGpuProcesses = [];
 let activeFilters = [];
+let currentMode = 'monitor'; // 'monitor' 或 'stats'
+let lastUpdateTime = null;
 
 // --- **新** 時鐘功能 ---
 function updateClock() {
@@ -43,9 +45,64 @@ function updateStatusDisplay(data) {
     `;
 }
 
+// 切換模式
+function switchMode(mode) {
+    currentMode = mode;
+    
+    // 更新按鈕樣式
+    const monitorBtn = document.getElementById('monitor-mode-btn');
+    const statsBtn = document.getElementById('stats-mode-btn');
+    const timespanSelect = document.getElementById('process-timespan-select');
+    const customInput = document.getElementById('custom-timespan-input');
+    const databaseSelect = document.getElementById('database-select');
+    const customDbInput = document.getElementById('custom-database-input');
+    
+    if (mode === 'monitor') {
+        monitorBtn.style.background = 'var(--active-tab-bg)';
+        monitorBtn.style.color = 'var(--active-tab-text)';
+        statsBtn.style.background = 'var(--card-bg)';
+        statsBtn.style.color = 'var(--text-primary)';
+        
+        // 即時進程模式：禁用時間和資料庫選擇器
+        timespanSelect.value = 'current';
+        timespanSelect.disabled = true;
+        timespanSelect.style.opacity = '0.5';
+        customInput.style.display = 'none';
+        
+        databaseSelect.value = 'monitoring.db';
+        databaseSelect.disabled = true;
+        databaseSelect.style.opacity = '0.5';
+        customDbInput.style.display = 'none';
+    } else {
+        monitorBtn.style.background = 'var(--card-bg)';
+        monitorBtn.style.color = 'var(--text-primary)';
+        statsBtn.style.background = 'var(--active-tab-bg)';
+        statsBtn.style.color = 'var(--active-tab-text)';
+        
+        // 歷史分析模式：啟用選擇器
+        timespanSelect.disabled = false;
+        timespanSelect.style.opacity = '1';
+        databaseSelect.disabled = false;
+        databaseSelect.style.opacity = '1';
+        
+        // 預設使用 1h
+        if (timespanSelect.value === 'current') {
+            timespanSelect.value = '1h';
+        }
+    }
+    
+    // 重新載入數據
+    showGpuProcesses();
+}
+
 async function showGpuProcesses() {
     const timespanSelect = document.getElementById('process-timespan-select');
     let timespan = timespanSelect ? timespanSelect.value : 'current';
+    
+    // 即時進程模式強制使用 current
+    if (currentMode === 'monitor') {
+        timespan = 'current';
+    }
     
     // 處理自定義時間輸入
     if (timespan === 'custom') {
@@ -106,6 +163,9 @@ async function showGpuProcesses() {
             }
         }
         
+        // 更新最後更新時間
+        lastUpdateTime = new Date();
+        
         applyFilters();
     } catch (error) {
         console.error('獲取進程失敗:', error);
@@ -118,21 +178,50 @@ async function showGpuProcesses() {
 function renderProcessTable(processes, containerId, title) {
     const container = document.getElementById(containerId);
     if (!container) return;
-    const timespanSelect = document.getElementById('process-timespan-select');
-    const isHistorical = timespanSelect && timespanSelect.value !== 'current';
     
-    let html = `<h3>${title}${isHistorical ? ' (包含歷史進程)' : ''}</h3>`;
-    if (processes.length > 0) {
-        const headers = isHistorical ? 
-            '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>狀態</th><th>PID</th><th>進程名</th><th>指令</th><th>平均GPU記憶體</th><th>平均CPU %</th><th>平均RAM (GB)</th><th>首次記錄</th><th>最後記錄</th><th>記錄數</th>' :
-            '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>PID</th><th>容器來源</th><th>進程名</th><th>指令</th><th>GPU記憶體</th><th>CPU %</th><th>RAM (GB)</th><th>啟動時間</th>';
+    let html = '';
+    
+    if (currentMode === 'monitor') {
+        // 📊 即時進程模式
+        const updateTimeStr = lastUpdateTime ? 
+            `最後更新: ${lastUpdateTime.toLocaleTimeString('zh-TW', { hour12: false })}` : 
+            '載入中...';
+        html = `<h3>📊 即時進程 (自動更新) <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);">${updateTimeStr}</span></h3>`;
+        if (processes.length > 0) {
+            const headers = '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>PID</th><th>容器來源</th><th>進程名</th><th>指令</th><th>GPU記憶體</th><th>CPU %</th><th>RAM (GB)</th><th>啟動時間</th>';
+            html += `<table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
             
-        html += `<table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
+            processes.forEach(proc => {
+                let memoryDisplay = proc.gpu_memory_mb > 0 ? `${proc.gpu_memory_mb} MB` : 'N/A';
+                const containerDisplay = proc.container_source || proc.container || '主機';
+                html += `<tr>
+                    <td><input type="checkbox" class="process-checkbox" data-pid="${proc.pid}"></td>
+                    <td>${proc.pid}</td>
+                    <td title="${containerDisplay}">${containerDisplay}</td>
+                    <td>${proc.name}</td>
+                    <td class="command-cell" title="${proc.command}">${proc.command}</td>
+                    <td>${memoryDisplay}</td>
+                    <td>${proc.cpu_percent}%</td>
+                    <td>${(proc.ram_mb / 1024).toFixed(2)}</td>
+                    <td>${proc.start_time}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+        } else {
+            html += '<p>目前沒有運行中的GPU進程。</p>';
+        }
+    } else {
+        // 📈 歷史分析模式
+        const timespanSelect = document.getElementById('process-timespan-select');
+        const timespan = timespanSelect ? timespanSelect.value : '1h';
+        html = `<h3>📈 歷史分析 (${timespan} 內的進程統計) <button onclick="refreshHistoryData()" style="margin-left: 10px; padding: 4px 8px; font-size: 0.8rem; background: var(--accent-grad-start); color: white; border: none; border-radius: 4px; cursor: pointer;">🔄 重新整理</button></h3>`;
         
-        processes.forEach(proc => {
-            let memoryDisplay = proc.gpu_memory_mb > 0 ? `${proc.gpu_memory_mb} MB` : 'N/A';
+        if (processes.length > 0) {
+            const headers = '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>狀態</th><th>PID</th><th>進程名</th><th>指令</th><th>平均GPU記憶體</th><th>平均CPU %</th><th>平均RAM (GB)</th><th>首次記錄</th><th>最後記錄</th><th>記錄數</th>';
+            html += `<table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
             
-            if (isHistorical) {
+            processes.forEach(proc => {
+                let memoryDisplay = proc.gpu_memory_mb > 0 ? `${proc.gpu_memory_mb} MB` : 'N/A';
                 const statusIcon = proc.status === 'running' ? '🟢' : '🔴';
                 const statusText = proc.status === 'running' ? '運行中' : '已結束';
                 html += `<tr>
@@ -148,20 +237,13 @@ function renderProcessTable(processes, containerId, title) {
                     <td>${proc.last_seen || 'N/A'}</td>
                     <td>${proc.record_count || 0}</td>
                 </tr>`;
-            } else {
-                const containerDisplay = proc.container_source || proc.container || '主機';
-                html += `<tr>
-                    <td><input type="checkbox" class="process-checkbox" data-pid="${proc.pid}"></td>
-                    <td>${proc.pid}</td><td title="${containerDisplay}">${containerDisplay}</td><td>${proc.name}</td>
-                    <td class="command-cell" title="${proc.command}">${proc.command}</td><td>${memoryDisplay}</td>
-                    <td>${proc.cpu_percent}%</td><td>${(proc.ram_mb / 1024).toFixed(2)}</td><td>${proc.start_time}</td>
-                </tr>`;
-            }
-        });
-        html += '</tbody></table>';
-    } else {
-        html += '<p>沒有符合條件的進程。</p>';
+            });
+            html += '</tbody></table>';
+        } else {
+            html += '<p>該時間範圍內沒有找到進程記錄。</p>';
+        }
     }
+    
     container.innerHTML = html;
 }
 
@@ -193,6 +275,15 @@ function applyFilters() {
     let filtered = [...allGpuProcesses];
     activeFilters.forEach(filter => {
         switch (filter.type) {
+            case 'search':
+                // 全文搜尋：搜尋 PID、進程名、指令
+                const searchTerm = filter.value.toLowerCase();
+                filtered = filtered.filter(p => 
+                    String(p.pid).includes(searchTerm) ||
+                    p.name.toLowerCase().includes(searchTerm) ||
+                    p.command.toLowerCase().includes(searchTerm)
+                );
+                break;
             case 'pid': filtered = filtered.filter(p => String(p.pid).includes(filter.value)); break;
             case 'name': filtered = filtered.filter(p => p.name.toLowerCase().includes(filter.value.toLowerCase())); break;
             case 'cmd': filtered = filtered.filter(p => p.command.toLowerCase().includes(filter.value.toLowerCase())); break;
@@ -212,16 +303,59 @@ function createFilterFromUI() {
     if (!value) return;
     let filter = {};
     const typeText = typeSelect.options[typeSelect.selectedIndex].text;
+    
     if (type === 'ram_gt' || type === 'gpu_gt') {
         const numValue = parseInt(value);
         if (isNaN(numValue)) { alert('請輸入有效的數字'); return; }
         filter = { id: `${type}:${value}`, type: type, value: numValue, label: `${typeText}: ${value}MB` };
+    } else if (type === 'search') {
+        filter = { id: `${type}:${value}`, type: type, value: value, label: `搜尋: ${value}` };
     } else {
         filter = { id: `${type}:${value}`, type: type, value: value, label: `${typeText}: ${value}` };
     }
     addFilter(filter);
     valueInput.value = '';
     valueInput.focus();
+}
+
+// --- 歷史數據重新整理 ---
+async function refreshHistoryData() {
+    const btn = event.target;
+    const originalText = btn.innerHTML;
+    
+    // 顯示載入狀態
+    btn.innerHTML = '⏳ 載入中...';
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    
+    try {
+        await showGpuProcesses();
+        
+        // 顯示成功狀態
+        btn.innerHTML = '✅ 已更新';
+        btn.style.background = '#28a745';
+        
+        // 1秒後恢復原狀
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.style.background = 'var(--accent-grad-start)';
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }, 1000);
+        
+    } catch (error) {
+        // 顯示錯誤狀態
+        btn.innerHTML = '❌ 失敗';
+        btn.style.background = '#dc3545';
+        
+        // 2秒後恢復原狀
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.style.background = 'var(--accent-grad-start)';
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }, 2000);
+    }
 }
 
 // --- 進程繪圖功能 ---
@@ -298,6 +432,35 @@ async function plotSelectedProcesses() {
     }
 }
 
+// --- 時間選擇器下拉功能 ---
+function showDropdown() {
+    const dropdown = document.getElementById('timeDropdown');
+    if (dropdown) {
+        dropdown.style.display = 'block';
+    }
+}
+
+function hideDropdown() {
+    setTimeout(() => {
+        const dropdown = document.getElementById('timeDropdown');
+        if (dropdown) {
+            dropdown.style.display = 'none';
+        }
+    }, 200); // 延遲隱藏，讓點擊事件能觸發
+}
+
+function selectTime(value) {
+    const input = document.getElementById('timeRange');
+    if (input) {
+        input.value = value;
+    }
+    hideDropdown();
+}
+
+function filterDropdown() {
+    // 可以在這裡實作篩選功能
+}
+
 // --- 系統圖表功能 ---
 
 async function generateSelectedChart() {
@@ -339,6 +502,10 @@ window.onload = function() {
 
     // 載入初始數據
     loadStatus();
+    
+    // 初始化模式狀態（確保UI與currentMode同步）
+    switchMode(currentMode);
+    
     showGpuProcesses();
 
     // 綁定事件監聽器
@@ -385,12 +552,16 @@ window.onload = function() {
         }
     });
 
+    // 綁定模式切換按鈕
+    document.getElementById('monitor-mode-btn').addEventListener('click', () => switchMode('monitor'));
+    document.getElementById('stats-mode-btn').addEventListener('click', () => switchMode('stats'));
+
     // 設定5秒自動更新
     setInterval(() => {
         loadStatus();
-        // 只有在顯示當前進程時才自動更新進程列表
-        const timespanSelect = document.getElementById('process-timespan-select');
-        if (timespanSelect && timespanSelect.value === 'current') {
+        // 只有在即時進程模式才自動更新進程列表
+        if (currentMode === 'monitor') {
+            console.log('🔄 即時模式自動更新進程列表');
             showGpuProcesses();
         }
     }, 5000);

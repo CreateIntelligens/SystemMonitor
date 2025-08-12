@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系統監控</title>
+    <link rel="icon" href="data:,">
     <style>
         :root {
             --bg-grad-start: #232526;
@@ -221,7 +222,13 @@
         <div id="process-analysis-section">
             <div class="filter-panel" style="background: var(--card-bg); padding: 30px; border-radius: 20px; margin-bottom: 30px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h3 style="margin: 0; color: var(--text-primary) !important;">🔍 進程搜尋與分析</h3>
+                    <div style="display: flex; align-items: center; gap: 20px;">
+                        <h3 style="margin: 0; color: var(--text-primary) !important;">🔍 進程搜尋與分析</h3>
+                        <div style="display: flex; gap: 5px;">
+                            <button id="monitor-mode-btn" class="tab-btn" style="padding: 8px 16px; font-size: 0.9rem; border: 1px solid var(--card-border); background: var(--active-tab-bg); color: var(--active-tab-text); border-radius: 8px; cursor: pointer;" tabindex="-1">📊 即時進程</button>
+                            <button id="stats-mode-btn" class="tab-btn" style="padding: 8px 16px; font-size: 0.9rem; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text-primary); border-radius: 8px; cursor: pointer;" tabindex="-1">📈 歷史分析</button>
+                        </div>
+                    </div>
                     <div style="display: flex; gap: 10px; align-items: center;">
                         <select id="database-select" class="form-control" style="width: 120px;">
                             <option value="monitoring.db">本機資料庫</option>
@@ -243,13 +250,14 @@
                 </div>
                 <div class="add-filter-controls" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
                     <select id="filter-type-select" class="form-control" style="flex: 1;">
+                        <option value="search">全文搜尋 (grep)</option>
                         <option value="name">進程名</option>
                         <option value="pid">PID</option>
                         <option value="cmd">指令</option>
                         <option value="ram_gt">RAM 大於 (MB)</option>
                         <option value="gpu_gt">GPU記憶體 大於 (MB)</option>
                     </select>
-                    <input type="text" id="filter-value-input" class="form-control" placeholder="輸入篩選數值..." style="flex: 2;">
+                    <input type="text" id="filter-value-input" class="form-control" placeholder="輸入關鍵字或數值..." style="flex: 2;">
                     <button id="add-filter-btn" class="btn" style="padding: 12px 20px; font-size: 1rem; margin: 0;">新增</button>
                 </div>
                 <div id="filter-pills-container" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; min-height: 38px;"></div>

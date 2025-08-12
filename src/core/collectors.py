@@ -212,7 +212,9 @@ class GPUCollector:
                                     'container': container_name,
                                     'container_source': container_source
                                 }
-                        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError) as e:
+                            if self.debug:
+                                print(f"⚠️  無法訪問PID {pid}: {e}")
                             continue
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
             pass # 主要方法失敗也沒關係，繼續執行備用方法

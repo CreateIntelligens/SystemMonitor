@@ -321,6 +321,12 @@ async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks
 # 靜態文件服務
 app.mount("/plots", StaticFiles(directory="plots"), name="plots")
 
+@app.get("/favicon.ico")
+async def favicon():
+    """返回空的favicon，避免404錯誤"""
+    from fastapi.responses import Response
+    return Response(status_code=204)  # No Content
+
 if __name__ == "__main__":
     import argparse
     
