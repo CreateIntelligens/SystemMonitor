@@ -45,6 +45,44 @@ function updateStatusDisplay(data) {
     `;
 }
 
+// 更新設定顯示
+function updateSettingsDisplay() {
+    const settingsText = document.getElementById('settings-text');
+    const databaseSelect = document.getElementById('database-select');
+    const customDbInput = document.getElementById('custom-database-input');
+    const timespanSelect = document.getElementById('process-timespan-select');
+    const customTimespanInput = document.getElementById('custom-timespan-input');
+    
+    if (!settingsText) return;
+    
+    // 獲取資料庫資訊
+    let databaseInfo = '本機資料庫 (monitoring.db)';
+    if (databaseSelect && databaseSelect.value === 'custom') {
+        const customDb = customDbInput ? customDbInput.value.trim() : '';
+        databaseInfo = customDb ? `其他資料庫 (${customDb})` : '其他資料庫 (未指定)';
+    } else if (databaseSelect && databaseSelect.value !== 'monitoring.db') {
+        databaseInfo = `其他資料庫 (${databaseSelect.value})`;
+    }
+    
+    // 獲取時間範圍資訊
+    let timeInfo = '即時進程';
+    if (currentMode === 'stats') {
+        if (timespanSelect) {
+            if (timespanSelect.value === 'custom') {
+                const customTime = customTimespanInput ? customTimespanInput.value.trim() : '';
+                timeInfo = customTime ? `自定義時間 (${customTime})` : '自定義時間 (未指定)';
+            } else {
+                const selectedOption = timespanSelect.options[timespanSelect.selectedIndex];
+                timeInfo = selectedOption ? selectedOption.text : timespanSelect.value;
+            }
+        }
+    }
+    
+    // 更新顯示
+    const modeIcon = currentMode === 'monitor' ? '📊' : '📈';
+    settingsText.textContent = `${modeIcon} 目前設定：${databaseInfo} | ${timeInfo}`;
+}
+
 // 切換模式
 function switchMode(mode) {
     currentMode = mode;
@@ -54,8 +92,8 @@ function switchMode(mode) {
     const statsBtn = document.getElementById('stats-mode-btn');
     const timespanSelect = document.getElementById('process-timespan-select');
     const customInput = document.getElementById('custom-timespan-input');
-    const databaseSelect = document.getElementById('database-select');
-    const customDbInput = document.getElementById('custom-database-input');
+    const processLiveIndicator = document.getElementById('process-live-indicator');
+    const processDatabaseControls = document.getElementById('process-database-controls');
     
     if (mode === 'monitor') {
         monitorBtn.style.background = 'var(--active-tab-bg)';
@@ -63,27 +101,25 @@ function switchMode(mode) {
         statsBtn.style.background = 'var(--card-bg)';
         statsBtn.style.color = 'var(--text-primary)';
         
-        // 即時進程模式：禁用時間和資料庫選擇器
+        // 即時進程模式：顯示實時指示器，隱藏DB選擇
+        processLiveIndicator.style.display = 'flex';
+        processDatabaseControls.style.display = 'none';
         timespanSelect.value = 'current';
         timespanSelect.disabled = true;
         timespanSelect.style.opacity = '0.5';
         customInput.style.display = 'none';
         
-        databaseSelect.value = 'monitoring.db';
-        databaseSelect.disabled = true;
-        databaseSelect.style.opacity = '0.5';
-        customDbInput.style.display = 'none';
     } else {
         monitorBtn.style.background = 'var(--card-bg)';
         monitorBtn.style.color = 'var(--text-primary)';
         statsBtn.style.background = 'var(--active-tab-bg)';
         statsBtn.style.color = 'var(--active-tab-text)';
         
-        // 歷史分析模式：啟用選擇器
+        // 歷史分析模式：隱藏實時指示器，顯示DB選擇
+        processLiveIndicator.style.display = 'none';
+        processDatabaseControls.style.display = 'flex';
         timespanSelect.disabled = false;
         timespanSelect.style.opacity = '1';
-        databaseSelect.disabled = false;
-        databaseSelect.style.opacity = '1';
         
         // 預設使用 1h
         if (timespanSelect.value === 'current') {
@@ -91,7 +127,16 @@ function switchMode(mode) {
         }
     }
     
-    // 重新載入數據
+    // 更新設定顯示
+    updateSettingsDisplay();
+}
+
+// 確認設定並載入數據
+function confirmSettings() {
+    // 更新設定顯示
+    updateSettingsDisplay();
+    
+    // 載入數據
     showGpuProcesses();
 }
 
@@ -214,7 +259,20 @@ function renderProcessTable(processes, containerId, title) {
         // 📈 歷史分析模式
         const timespanSelect = document.getElementById('process-timespan-select');
         const timespan = timespanSelect ? timespanSelect.value : '1h';
-        html = `<h3>📈 歷史分析 (${timespan} 內的進程統計) <button onclick="refreshHistoryData()" style="margin-left: 10px; padding: 4px 8px; font-size: 0.8rem; background: var(--accent-grad-start); color: white; border: none; border-radius: 4px; cursor: pointer;">🔄 重新整理</button></h3>`;
+        
+        // 獲取當前使用的資料庫名稱
+        const databaseSelect = document.getElementById('database-select');
+        const customDatabaseInput = document.getElementById('custom-database-input');
+        let databaseName = 'monitoring.db';
+        if (databaseSelect && databaseSelect.value === 'custom' && customDatabaseInput && customDatabaseInput.value.trim()) {
+            databaseName = customDatabaseInput.value.trim();
+        } else if (databaseSelect) {
+            databaseName = databaseSelect.value;
+        }
+        
+        html = `<h3>📈 歷史分析 (${timespan} 內的進程統計) 
+                <span style="font-size: 1.1rem; color: var(--accent-grad-start); margin-left: 15px;">📊 ${databaseName}</span>
+                <button onclick="refreshHistoryData()" style="margin-left: 10px; padding: 4px 8px; font-size: 0.8rem; background: var(--accent-grad-start); color: white; border: none; border-radius: 4px; cursor: pointer;">🔄 重新整理</button></h3>`;
         
         if (processes.length > 0) {
             const headers = '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>狀態</th><th>PID</th><th>進程名</th><th>指令</th><th>平均GPU記憶體</th><th>平均CPU %</th><th>平均RAM (GB)</th><th>首次記錄</th><th>最後記錄</th><th>記錄數</th>';
@@ -474,8 +532,33 @@ async function generateChart(timespan) {
     const chartsGrid = document.getElementById('chartsGrid');
     loading.style.display = 'block';
     chartsGrid.innerHTML = '';
+    
     try {
-        const response = await fetch(`/api/plot/${timespan}`, { method: 'POST' });
+        // 獲取選定的資料庫（使用系統圖表的選擇器）
+        const systemDatabaseSelect = document.getElementById('system-database-select');
+        const systemCustomDbInput = document.getElementById('system-custom-database-input');
+        let selectedDatabase = 'monitoring.db';
+        
+        if (systemDatabaseSelect && systemDatabaseSelect.value === 'custom') {
+            selectedDatabase = systemCustomDbInput ? systemCustomDbInput.value.trim() : 'monitoring.db';
+            if (!selectedDatabase) {
+                alert('請輸入自定義資料庫檔案名稱');
+                return;
+            }
+        } else if (systemDatabaseSelect && systemDatabaseSelect.value !== 'monitoring.db') {
+            selectedDatabase = systemDatabaseSelect.value;
+        }
+        
+        // 構建請求體
+        const requestBody = selectedDatabase !== 'monitoring.db' ? 
+            { database_file: selectedDatabase } : {};
+        
+        const response = await fetch(`/api/plot/${timespan}`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+        
         const result = await response.json();
         if (result.success) {
             chartsGrid.innerHTML = result.charts.map(chart => `
@@ -506,7 +589,10 @@ window.onload = function() {
     // 初始化模式狀態（確保UI與currentMode同步）
     switchMode(currentMode);
     
-    showGpuProcesses();
+    // 初始載入（即時模式才自動載入）
+    if (currentMode === 'monitor') {
+        showGpuProcesses();
+    }
 
     // 綁定事件監聽器
     document.getElementById('add-filter-btn').addEventListener('click', createFilterFromUI);
@@ -523,13 +609,13 @@ window.onload = function() {
             customInput.focus();
         } else {
             customInput.style.display = 'none';
-            showGpuProcesses();
+            updateSettingsDisplay();
         }
     });
     
     document.getElementById('custom-database-input').addEventListener('keydown', function(event) {
         if (event.key === 'Enter') {
-            showGpuProcesses();
+            updateSettingsDisplay();
         }
     });
     
@@ -542,19 +628,75 @@ window.onload = function() {
             customInput.focus();
         } else {
             customInput.style.display = 'none';
-            showGpuProcesses();
+            updateSettingsDisplay();
         }
     });
     
     document.getElementById('custom-timespan-input').addEventListener('keydown', function(event) {
         if (event.key === 'Enter') {
-            showGpuProcesses();
+            updateSettingsDisplay();
         }
     });
 
     // 綁定模式切換按鈕
     document.getElementById('monitor-mode-btn').addEventListener('click', () => switchMode('monitor'));
     document.getElementById('stats-mode-btn').addEventListener('click', () => switchMode('stats'));
+
+    // 綁定確認按鈕
+    document.getElementById('confirm-settings-btn').addEventListener('click', confirmSettings);
+
+    // 綁定系統圖表資料庫選擇器
+    document.getElementById('system-database-select').addEventListener('change', function() {
+        const select = this;
+        const customInput = document.getElementById('system-custom-database-input');
+        
+        if (select.value === 'custom') {
+            customInput.style.display = 'inline-block';
+            customInput.focus();
+        } else {
+            customInput.style.display = 'none';
+        }
+    });
+
+    // 系統監控模式切換
+    let currentSystemMode = 'live'; // 'live' 或 'history'
+    
+    function switchSystemMode(mode) {
+        currentSystemMode = mode;
+        const liveModeBtn = document.getElementById('live-mode-btn');
+        const historyModeBtn = document.getElementById('history-mode-btn');
+        const liveIndicator = document.getElementById('live-indicator');
+        const databaseControls = document.getElementById('database-controls');
+        
+        if (mode === 'live') {
+            // 實時模式
+            liveModeBtn.classList.add('active');
+            historyModeBtn.classList.remove('active');
+            liveIndicator.style.display = 'flex';
+            databaseControls.style.display = 'none';
+            
+            // 恢復自動更新
+            if (statusInterval) clearInterval(statusInterval);
+            statusInterval = setInterval(fetchSystemStatus, 2000);
+            
+        } else {
+            // 歷史模式
+            historyModeBtn.classList.add('active');
+            liveModeBtn.classList.remove('active');
+            liveIndicator.style.display = 'none';
+            databaseControls.style.display = 'flex';
+            
+            // 停止自動更新
+            if (statusInterval) {
+                clearInterval(statusInterval);
+                statusInterval = null;
+            }
+        }
+    }
+    
+    // 綁定模式切換按鈕
+    document.getElementById('live-mode-btn').addEventListener('click', () => switchSystemMode('live'));
+    document.getElementById('history-mode-btn').addEventListener('click', () => switchSystemMode('history'));
 
     // 設定5秒自動更新
     setInterval(() => {

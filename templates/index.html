@@ -74,6 +74,18 @@
         .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 25px var(--accent-shadow); }
         
         .chart-controls { display: flex; justify-content: center; align-items: center; gap: 15px; margin: 40px 0; }
+        
+        /* 模式切換按鈕 */
+        .mode-switch { display: flex; background: rgba(0,0,0,0.3); border-radius: 25px; padding: 5px; }
+        .mode-btn { 
+            padding: 10px 20px; border: none; background: none; color: var(--text-secondary); 
+            cursor: pointer; border-radius: 20px; transition: all 0.3s ease; font-size: 0.9rem;
+        }
+        .mode-btn.active { 
+            background: linear-gradient(45deg, var(--accent-grad-start), var(--accent-grad-end)); 
+            color: white; 
+        }
+        .mode-btn:hover:not(.active) { color: var(--text-primary); }
         .time-selector { position: relative; }
         .time-input { padding: 12px 20px; border: 2px solid rgba(255,255,255,0.2); border-radius: 25px; background: rgba(0,0,0,0.2); backdrop-filter: blur(10px); color: white; font-size: 1rem; width: 200px; }
         .time-input::placeholder { color: rgba(255,255,255,0.6); }
@@ -191,9 +203,25 @@
         
         <!-- 系統圖表控制項 -->
         <div class="chart-controls">
-            <div class="live-indicator">
+            <!-- 模式切換按鈕 -->
+            <div class="mode-switch">
+                <button id="live-mode-btn" class="mode-btn active">🔴 實時監控</button>
+                <button id="history-mode-btn" class="mode-btn">📊 歷史分析</button>
+            </div>
+            
+            <!-- 實時指示器（只在實時模式顯示）-->
+            <div id="live-indicator" class="live-indicator">
                 <div class="live-dot"></div>
-                <span>實時監控</span>
+                <span>即時更新中</span>
+            </div>
+            
+            <!-- DB選擇（只在歷史模式顯示）-->
+            <div id="database-controls" class="database-controls" style="display: none;">
+                <select id="system-database-select" class="form-control" style="width: 150px;">
+                    <option value="monitoring.db">本機資料庫</option>
+                    <option value="custom">其他資料庫</option>
+                </select>
+                <input type="text" id="system-custom-database-input" class="form-control" placeholder="例：server2.db" style="width: 150px; display: none; margin-left: 5px;">
             </div>
             <div class="time-selector">
                 <input type="text" class="time-input" id="timeRange" placeholder="選擇時間範圍..." 
@@ -220,7 +248,7 @@
 
         <!-- 進程分析區 -->
         <div id="process-analysis-section">
-            <div class="filter-panel" style="background: var(--card-bg); padding: 30px; border-radius: 20px; margin-bottom: 30px;">
+            <div class="filter-panel" style="background: var(--card-bg); padding: 30px; border-radius: 20px; margin-bottom: 30px; border: 1px solid var(--card-border); box-shadow: 0 4px 16px rgba(0,0,0,0.15);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <div style="display: flex; align-items: center; gap: 20px;">
                         <h3 style="margin: 0; color: var(--text-primary) !important;">🔍 進程搜尋與分析</h3>
@@ -230,11 +258,20 @@
                         </div>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center;">
-                        <select id="database-select" class="form-control" style="width: 120px;">
-                            <option value="monitoring.db">本機資料庫</option>
-                            <option value="custom">其他資料庫</option>
-                        </select>
-                        <input type="text" id="custom-database-input" class="form-control" placeholder="例：server2.db" style="width: 120px; display: none; margin-left: 5px;">
+                        <!-- 即時更新指示器（只在即時進程模式顯示）-->
+                        <div id="process-live-indicator" class="live-indicator" style="font-size: 0.8rem;">
+                            <div class="live-dot"></div>
+                            <span>即時更新</span>
+                        </div>
+                        
+                        <!-- 進程DB選擇（只在歷史分析模式顯示）-->
+                        <div id="process-database-controls" style="display: none;">
+                            <select id="database-select" class="form-control" style="width: 120px;">
+                                <option value="monitoring.db">本機資料庫</option>
+                                <option value="custom">其他資料庫</option>
+                            </select>
+                            <input type="text" id="custom-database-input" class="form-control" placeholder="例：server2.db" style="width: 120px; display: none; margin-left: 5px;">
+                        </div>
                         <select id="process-timespan-select" class="form-control" style="width: 120px;">
                             <option value="current">目前運行</option>
                             <option value="1h">1小時內</option>
@@ -245,7 +282,13 @@
                             <option value="custom">自定義</option>
                         </select>
                         <input type="text" id="custom-timespan-input" class="form-control" placeholder="例：2d, 12h, 30m" style="width: 120px; display: none; margin-left: 5px;">
+                        <button id="confirm-settings-btn" class="btn" style="padding: 10px 15px; font-size: 0.9rem; margin: 0; background: var(--accent-grad-end);">🔍 確認載入</button>
                         <button id="plot-selected-btn" class="btn" style="padding: 10px 15px; font-size: 0.9rem; margin: 0;">繪製選定進程圖表</button>
+                    </div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div id="current-settings-display" style="font-size: 0.9rem; color: var(--text-secondary); padding: 8px 12px; background: rgba(0,0,0,0.1); border-radius: 8px; border-left: 3px solid var(--accent-grad-start);">
+                        <span id="settings-text">📊 目前設定：本機資料庫 (monitoring.db) | 即時進程</span>
                     </div>
                 </div>
                 <div class="add-filter-controls" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
@@ -262,7 +305,7 @@
                 </div>
                 <div id="filter-pills-container" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; min-height: 38px;"></div>
             </div>
-            <div id="filteredProcessList" class="gpu-processes-container"></div>
+            <div id="filteredProcessList" class="gpu-processes-container" style="border: 1px solid var(--card-border); box-shadow: 0 4px 16px rgba(0,0,0,0.15);"></div>
             <div id="process-chart-container" class="charts-grid" style="margin-top: 20px;"></div>
         </div>
     </div>

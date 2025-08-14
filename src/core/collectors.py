@@ -24,6 +24,7 @@ class GPUCollector:
     def __init__(self):
         self.gpu_available = self._check_nvidia_smi()
         self.docker_client = self._init_docker_client()
+        self.debug = True  # 暫時啟用調試模式
     
     def _init_docker_client(self):
         """初始化Docker客戶端"""
@@ -87,13 +88,28 @@ class GPUCollector:
         return container_map
     
     def _check_nvidia_smi(self) -> bool:
-        """檢查 nvidia-smi 是否可用"""
-        try:
-            result = subprocess.run(['nvidia-smi', '--version'], 
-                                  capture_output=True, text=True, timeout=5)
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-            return False
+        """檢查 nvidia-smi 是否可用，支援多種檢測方式以提高兼容性"""
+        # 嘗試多種nvidia-smi命令來檢測可用性
+        test_commands = [
+            ['nvidia-smi', '--version'],       # 最常用的版本檢查
+            ['nvidia-smi', '--list-gpus'],     # 適用於較舊驅動版本
+            ['nvidia-smi', '-L'],              # 簡短的GPU列表命令
+            ['nvidia-smi', '--help'],          # 基本幫助命令
+            ['nvidia-smi']                     # 基本狀態查詢
+        ]
+        
+        for cmd in test_commands:
+            try:
+                result = subprocess.run(cmd, 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    print(f"[DEBUG] NVIDIA GPU 檢測成功，使用命令: {' '.join(cmd)}")
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+                continue
+                
+        print("[WARNING] 所有 nvidia-smi 檢測方法都失敗，將無法監控GPU")
+        return False
     
     def get_gpu_stats(self) -> Optional[Dict]:
         """獲取 GPU 使用統計"""
@@ -166,14 +182,15 @@ class GPUCollector:
         # 獲取容器進程映射
         container_map = self._get_container_process_map()
 
-        # 1. 主要方法: nvidia-smi
+        # 1. 主要方法: nvidia-smi (嘗試多種查詢方式)
         try:
+            # 方法1: 標準nvidia-smi輸出
             result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=10, encoding='utf-8')
             if result.returncode == 0:
                 output = result.stdout
                 in_processes_section = False
-                # 支援新版 nvidia-smi 格式: |    0   N/A  N/A         1306310      C   python                                10028MiB |
-                proc_line_regex = re.compile(r"^\|\s*\d+\s+N/A\s+N/A\s+(\d+)\s+([GgCc])\s+(.+?)\s+(\d+)MiB\s*\|$")
+                # 支援 nvidia-smi 格式: 記憶體可能是數字或 N/A
+                proc_line_regex = re.compile(r"^\|\s+\d+\s+N/A\s+N/A\s+(\d+)\s+([GgCc])\s+(.+?)\s+(\d+|N/A)\s*\|$")
 
                 for line in output.split('\n'):
                     if line.startswith('| Processes:'):
@@ -189,8 +206,8 @@ class GPUCollector:
                             pid = int(match.group(1))
                             proc_type = match.group(2).upper()
                             proc_name = match.group(3).strip()
-                            mem_usage_str = match.group(4) if len(match.groups()) >= 4 else '0'
-                            gpu_memory_mb = int(mem_usage_str) if mem_usage_str.isdigit() else 0
+                            mem_usage_str = match.group(4) if len(match.groups()) >= 4 else 'N/A'
+                            gpu_memory_mb = int(mem_usage_str) if mem_usage_str != 'N/A' else 0
 
                             if psutil.pid_exists(pid):
                                 p = psutil.Process(pid)
@@ -207,7 +224,7 @@ class GPUCollector:
                                     'gpu_memory_mb': gpu_memory_mb,
                                     'cpu_percent': round(p.cpu_percent(), 1),
                                     'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                                    'start_time': datetime.fromtimestamp(p.create_time()).strftime('%H:%M:%S'),
+                                    'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
                                     'type': f'NVIDIA {"Graphics" if proc_type == "G" else "Compute"}',
                                     'container': container_name,
                                     'container_source': container_source
@@ -216,6 +233,45 @@ class GPUCollector:
                             if self.debug:
                                 print(f"⚠️  無法訪問PID {pid}: {e}")
                             continue
+            # 方法2: 嘗試compute apps查詢補充GPU記憶體信息
+            try:
+                compute_result = subprocess.run(['nvidia-smi', '--query-compute-apps=pid,used_memory', '--format=csv,noheader,nounits'], 
+                                              capture_output=True, text=True, timeout=10)
+                if compute_result.returncode == 0:
+                    for line in compute_result.stdout.strip().split('\n'):
+                        if line.strip():
+                            parts = [p.strip() for p in line.split(',')]
+                            if len(parts) >= 2:
+                                try:
+                                    pid = int(parts[0])
+                                    mem_usage = parts[1]
+                                    gpu_memory_mb = int(mem_usage) if mem_usage != '[N/A]' and mem_usage.isdigit() else 0
+                                    
+                                    # 更新已存在的進程或新增進程
+                                    if pid in processes:
+                                        processes[pid]['gpu_memory_mb'] = gpu_memory_mb
+                                    elif psutil.pid_exists(pid):
+                                        p = psutil.Process(pid)
+                                        container_info = container_map.get(pid, None)
+                                        container_name = container_info['name'] if container_info else 'Host'
+                                        container_source = f"{container_info['name']} ({container_info['image']})" if container_info else '主機'
+                                        
+                                        processes[pid] = {
+                                            'pid': pid,
+                                            'name': p.name(),
+                                            'command': ' '.join(p.cmdline()) if p.cmdline() else 'Unknown',
+                                            'gpu_memory_mb': gpu_memory_mb,
+                                            'cpu_percent': round(p.cpu_percent(), 1),
+                                            'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
+                                            'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
+                                            'type': 'NVIDIA Compute',
+                                            'container': container_name,
+                                            'container_source': container_source
+                                        }
+                                except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+                                    continue
+            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+                pass
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
             pass # 主要方法失敗也沒關係，繼續執行備用方法
 
@@ -227,7 +283,19 @@ class GPUCollector:
                     continue
                 
                 cmd_line = ' '.join(proc.info['cmdline'] or [])
-                if any(keyword in cmd_line.lower() for keyword in gpu_keywords):
+                proc_name = proc.info['name'] or ''
+                full_search_text = f"{proc_name} {cmd_line}".lower()
+                
+                # 檢查GPU關鍵字
+                has_gpu_keywords = any(keyword in full_search_text for keyword in gpu_keywords)
+                
+                # 檢查是否為Python進程（不管在做什麼，都要監控）
+                is_python_process = 'python' in proc_name.lower()
+                
+                if has_gpu_keywords or is_python_process:
+                    if self.debug:
+                        print(f"🔍 備用方法找到潛在GPU進程: PID={proc.info['pid']}, 名稱={proc_name}")
+                    
                     p = psutil.Process(proc.info['pid'])
                     
                     # 檢查是否為容器進程
@@ -242,7 +310,7 @@ class GPUCollector:
                         'gpu_memory_mb': 0, # 無法從此方法得知
                         'cpu_percent': round(p.cpu_percent(), 1),
                         'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                        'start_time': datetime.fromtimestamp(p.create_time()).strftime('%H:%M:%S'),
+                        'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
                         'type': 'Potential GPU (Keyword)',
                         'container': container_name,
                         'container_source': container_source

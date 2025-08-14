@@ -113,32 +113,47 @@ async def get_status():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class PlotRequest(BaseModel):
+    database_file: str = "monitoring.db"
+
 @app.post("/api/plot/{timespan}")
-async def generate_plot(timespan: str, background_tasks: BackgroundTasks):
-    """生成圖表API"""
+async def generate_plot(timespan: str, background_tasks: BackgroundTasks, 
+                       req: PlotRequest = None):
+    """生成圖表API - 支援多資料庫"""
     try:
-        # 獲取數據
-        metrics = database.get_metrics_by_timespan(timespan)
+        # 決定使用哪個資料庫
+        database_file = req.database_file if req and req.database_file else "monitoring.db"
+        
+        if database_file != "monitoring.db":
+            # 使用指定的資料庫
+            from core import MonitoringDatabase
+            custom_database = MonitoringDatabase(database_file)
+            metrics = custom_database.get_metrics_by_timespan(timespan)
+            db_name = database_file
+        else:
+            # 使用預設資料庫
+            metrics = database.get_metrics_by_timespan(timespan)
+            db_name = "monitoring.db"
         
         if not metrics:
-            return {"success": False, "error": "沒有數據可生成圖表"}
+            return {"success": False, "error": f"資料庫 {db_name} 中沒有 {timespan} 時間範圍的數據"}
         
         # 生成圖表
         charts = []
         
         overview_path = visualizer.plot_system_overview(metrics, timespan=timespan)
-        charts.append({"title": "系統概覽", "path": Path(overview_path).relative_to("plots")})
+        charts.append({"title": f"系統概覽 ({db_name})", "path": Path(overview_path).relative_to("plots")})
         
         comparison_path = visualizer.plot_resource_comparison(metrics)
-        charts.append({"title": "資源對比", "path": Path(comparison_path).relative_to("plots")})
+        charts.append({"title": f"資源對比 ({db_name})", "path": Path(comparison_path).relative_to("plots")})
         
         memory_path = visualizer.plot_memory_usage(metrics)
-        charts.append({"title": "記憶體使用", "path": Path(memory_path).relative_to("plots")})
+        charts.append({"title": f"記憶體使用 ({db_name})", "path": Path(memory_path).relative_to("plots")})
         
         distribution_path = visualizer.plot_usage_distribution(metrics)
-        charts.append({"title": "使用率分佈", "path": Path(distribution_path).relative_to("plots")})
+        charts.append({"title": f"使用率分佈 ({db_name})", "path": Path(distribution_path).relative_to("plots")})
         
-        return {"success": True, "charts": charts}
+        return {"success": True, "charts": charts, "database": db_name}
         
     except Exception as e:
         return {"success": False, "error": str(e)}
