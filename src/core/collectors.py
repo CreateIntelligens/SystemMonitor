@@ -814,19 +814,30 @@ class GPUCollector:
                     container_name = container_info['name'] if container_info else 'Host'
                     container_source = f"{container_info['name']} ({container_info['image']})" if container_info else '主機'
                     
-                    processes[p.pid] = {
-                        'pid': p.pid, 
-                        'name': p.name(),
-                        'command': cmd_line,
-                        'gpu_memory_mb': gpu_memory_mb,
-                        'gpu_utilization': gpu_utilization,
-                        'cpu_percent': round(p.cpu_percent(), 1),
-                        'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                        'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
-                        'type': proc_type,
-                        'container': container_name,
-                        'container_source': container_source
-                    }
+                    # 避免重複：如果該進程已經在 processes 中，更新其資訊而不是覆蓋
+                    if p.pid not in processes:
+                        processes[p.pid] = {
+                            'pid': p.pid, 
+                            'name': p.name(),
+                            'command': cmd_line,
+                            'gpu_memory_mb': gpu_memory_mb,
+                            'gpu_utilization': gpu_utilization,
+                            'cpu_percent': round(p.cpu_percent(), 1),
+                            'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
+                            'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
+                            'type': proc_type,
+                            'container': container_name,
+                            'container_source': container_source
+                        }
+                    else:
+                        # 如果進程已存在，但有更準確的GPU資訊，則更新
+                        existing = processes[p.pid]
+                        if gpu_memory_mb > existing.get('gpu_memory_mb', 0):
+                            existing['gpu_memory_mb'] = gpu_memory_mb
+                            existing['gpu_utilization'] = gpu_utilization
+                            existing['type'] = proc_type
+                            if self.debug:
+                                print(f"[DEBUG] 更新現有進程 {p.pid} 的GPU資訊: {gpu_memory_mb}MB")
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 

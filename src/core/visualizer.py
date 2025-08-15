@@ -216,11 +216,31 @@ class SystemMonitorVisualizer:
                         ax2.fill_between(valid_times, valid_data_gb, alpha=0.2, color=self.colors['vram'])
                 
                 # 添加VRAM上限線
+                vram_total_for_chart = None
                 if 'vram_total_mb' in df.columns:
-                    total_vram_gb = df['vram_total_mb'].iloc[0] / 1024 if df['vram_total_mb'].iloc[0] else 8.0
-                    ax2.axhline(y=total_vram_gb, color='red', linestyle='--', alpha=0.7,
-                               label=f'Total VRAM ({total_vram_gb:.1f}GB)')
-                    ax2.set_ylim(0, total_vram_gb * 1.1)
+                    vram_values = df['vram_total_mb'].dropna()
+                    if len(vram_values) > 0 and vram_values.iloc[0] > 0:
+                        vram_total_for_chart = vram_values.iloc[0] / 1024
+                
+                # 如果無法從資料中獲取，嘗試即時檢測
+                if vram_total_for_chart is None:
+                    try:
+                        from .collectors import GPUCollector
+                        gpu_collector = GPUCollector()
+                        if gpu_collector.gpu_available:
+                            gpu_stats = gpu_collector.get_gpu_stats()
+                            if gpu_stats and len(gpu_stats) > 0:
+                                vram_total_for_chart = gpu_stats[0].get('vram_total_mb', 0) / 1024
+                    except:
+                        pass
+                
+                # 最後預設值
+                if vram_total_for_chart is None or vram_total_for_chart <= 0:
+                    vram_total_for_chart = 12.0
+                
+                ax2.axhline(y=vram_total_for_chart, color='red', linestyle='--', alpha=0.7,
+                           label=f'Total VRAM ({vram_total_for_chart:.1f}GB)')
+                ax2.set_ylim(0, vram_total_for_chart * 1.1)
                     
             else:
                 ax2.text(0.5, 0.5, 'VRAM Data Not Available', ha='center', va='center', transform=ax2.transAxes, fontsize=14, alpha=0.5)
@@ -346,7 +366,9 @@ class SystemMonitorVisualizer:
             total_ram_gb = 16.0
         
         # 嘗試從數據中獲取GPU記憶體上限
-        total_vram_gb = 8.0  # 預設值
+        total_vram_gb = None
+        
+        # 方法1: 從 raw_data 獲取
         if not df.empty and 'raw_data' in df.columns:
             try:
                 import json
@@ -357,6 +379,28 @@ class SystemMonitorVisualizer:
                         break
             except:
                 pass
+        
+        # 方法2: 從 vram_total_mb 欄位直接獲取
+        if total_vram_gb is None and not df.empty and 'vram_total_mb' in df.columns:
+            vram_values = df['vram_total_mb'].dropna()
+            if len(vram_values) > 0 and vram_values.iloc[0] > 0:
+                total_vram_gb = vram_values.iloc[0] / 1024
+        
+        # 方法3: 動態檢測目前系統 VRAM
+        if total_vram_gb is None:
+            try:
+                from .collectors import GPUCollector
+                gpu_collector = GPUCollector()
+                if gpu_collector.gpu_available:
+                    gpu_stats = gpu_collector.get_gpu_stats()
+                    if gpu_stats and len(gpu_stats) > 0:
+                        total_vram_gb = gpu_stats[0].get('vram_total_mb', 0) / 1024
+            except:
+                pass
+        
+        # 最後的預設值
+        if total_vram_gb is None or total_vram_gb <= 0:
+            total_vram_gb = 12.0  # 提高預設值，因為現代GPU通常有更多VRAM
 
         with plt.style.context(self._dark_style_params):
             fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16), sharex=True)

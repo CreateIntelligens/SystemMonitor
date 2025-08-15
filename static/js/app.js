@@ -241,6 +241,13 @@ function renderProcessTable(processes, containerId, title) {
     const container = document.getElementById(containerId);
     if (!container) return;
     
+    // 保存滾輪位置
+    let scrollTop = 0;
+    const existingScrollContainer = container.querySelector('.process-table-container');
+    if (existingScrollContainer) {
+        scrollTop = existingScrollContainer.scrollTop;
+    }
+    
     let html = '';
     
     if (currentMode === 'monitor') {
@@ -322,6 +329,16 @@ function renderProcessTable(processes, containerId, title) {
     }
     
     container.innerHTML = html;
+    
+    // 恢復滾輪位置
+    if (scrollTop > 0) {
+        setTimeout(() => {
+            const newScrollContainer = container.querySelector('.process-table-container');
+            if (newScrollContainer) {
+                newScrollContainer.scrollTop = scrollTop;
+            }
+        }, 50); // 稍微延遲以確保DOM更新完成
+    }
 }
 
 // --- 篩選標籤 (Pill) 系統 ---
