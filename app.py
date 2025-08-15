@@ -62,10 +62,30 @@ async def get_status():
     """獲取系統狀態API"""
     try:
         # 獲取當前狀態
-        current_data = collector.collect_simple()
+        try:
+            current_data = collector.collect_simple()
+            print(f"[DEBUG] current_data 獲取成功")
+        except Exception as e:
+            print(f"[ERROR] collect_simple() 失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            current_data = {
+                'cpu_usage': 0, 'ram_usage': 0, 'ram_used_gb': 0, 'ram_total_gb': 0,
+                'gpu_usage': None, 'vram_usage': None, 'vram_used_mb': None, 'vram_total_mb': None,
+                'gpu_temperature': None, 'cpu_source': 'error', 'ram_source': 'error'
+            }
         
         # 獲取資料庫統計
-        stats = database.get_statistics()
+        try:
+            stats = database.get_statistics()
+            print(f"[DEBUG] database stats 獲取成功")
+        except Exception as e:
+            print(f"[ERROR] database.get_statistics() 失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            stats = {
+                'total_records': 0, 'database_size_mb': 0, 'earliest_record': None
+            }
         
         # 獲取系統資訊
         import socket
@@ -100,7 +120,8 @@ async def get_status():
                 elif gpu_stats and isinstance(gpu_stats, dict):
                     system_info["gpu_name"] = gpu_stats.get("gpu_name", "Unknown GPU")
                     system_info["gpu_memory_total"] = gpu_stats.get("vram_total_mb", 0)
-            except Exception:
+            except Exception as e:
+                print(f"[ERROR] GPU資訊獲取失敗: {e}")
                 # 如果獲取 GPU 資訊失敗，使用預設值
                 pass
         
@@ -111,6 +132,9 @@ async def get_status():
             "system_info": system_info
         }
     except Exception as e:
+        print(f"[ERROR] /api/status 總體錯誤: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 class PlotRequest(BaseModel):
@@ -125,7 +149,9 @@ async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
         database_file = req.database_file if req and req.database_file else "monitoring.db"
         
         if database_file != "monitoring.db":
-            # 使用指定的資料庫
+            # 使用指定的資料庫，確保在 data/ 目錄下
+            if not database_file.startswith('data/'):
+                database_file = f"data/{database_file}"
             from core import MonitoringDatabase
             custom_database = MonitoringDatabase(database_file)
             metrics = custom_database.get_metrics_by_timespan(timespan)
@@ -172,11 +198,25 @@ async def get_gpu_processes():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/all-processes/{timespan}")
-async def get_all_processes(timespan: str):
-    """獲取指定時間範圍內的所有歷史進程（包括已結束的）"""
+@app.post("/api/all-processes/{timespan}")
+async def get_all_processes(timespan: str, req: PlotRequest = None):
+    """獲取指定時間範圍內的所有歷史進程（包括已結束的）- 支援多資料庫"""
     try:
         from datetime import datetime, timedelta
+        from core import MonitoringDatabase
+        
+        # 決定使用哪個資料庫
+        database_file = req.database_file if req and req.database_file else "monitoring.db"
+        
+        if database_file != "monitoring.db":
+            # 使用指定的資料庫，確保在 data/ 目錄下
+            if not database_file.startswith('data/'):
+                database_file = f"data/{database_file}"
+            custom_database = MonitoringDatabase(database_file)
+            db_instance = custom_database
+        else:
+            # 使用預設資料庫
+            db_instance = database
         
         # 計算時間範圍
         now = datetime.now()
@@ -193,13 +233,14 @@ async def get_all_processes(timespan: str):
             start_time = now - timedelta(hours=24)  # 預設24小時
         
         # 獲取該時間範圍內的所有進程（包括已結束的）
-        all_processes = database.get_unique_processes_in_timespan(start_time, now)
+        all_processes = db_instance.get_unique_processes_in_timespan(start_time, now)
         
         return {
             "success": True,
             "processes": all_processes,
             "timespan": timespan,
-            "count": len(all_processes)
+            "count": len(all_processes),
+            "database": database_file
         }
     except Exception as e:
         return {"success": False, "error": str(e)}

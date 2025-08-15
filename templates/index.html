@@ -109,11 +109,42 @@
         
         .gpu-processes-container { background: var(--card-bg); backdrop-filter: blur(15px); border-radius: 15px; padding: 25px; margin-top: 40px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); color: var(--text-primary); }
         .gpu-processes-container h3 { font-size: 1.6rem; margin-bottom: 20px; }
+        
+        /* 進程表格滾動容器 */
+        .process-table-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
         .process-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
         .process-table th, .process-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
-        .process-table thead th { background-color: rgba(255,255,255,0.1); font-weight: 600; }
+        .process-table thead th { 
+            background-color: rgba(255,255,255,0.1); 
+            font-weight: 600; 
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
         .process-table tbody tr:hover { background-color: rgba(255,255,255,0.05); }
         .command-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        
+        /* 滾動條樣式 */
+        .process-table-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .process-table-container::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+        }
+        .process-table-container::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.3);
+            border-radius: 4px;
+        }
+        .process-table-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(255,255,255,0.5);
+        }
 
         /* Tab Styles */
         .tab-btn.active { background: var(--active-tab-bg) !important; color: var(--active-tab-text) !important; }

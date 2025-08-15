@@ -72,9 +72,14 @@ class SystemMonitorVisualizer:
         df = self._prepare_data(metrics)
         if df.empty: raise ValueError("No data to plot")
         
+        # 獲取實際的時間範圍
+        start_time = df['datetime'].min().strftime('%m/%d %H:%M')
+        end_time = df['datetime'].max().strftime('%m/%d %H:%M')
+        date_range = f"{start_time} - {end_time}"
+        
         with plt.style.context(self._dark_style_params):
             fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-            fig.suptitle(f'System Monitor Overview - {timespan}', fontsize=16, fontweight='bold')
+            fig.suptitle(f'System Monitor Overview - {timespan}\n{date_range}', fontsize=16, fontweight='bold')
             
             axes_map = {
                 'CPU Usage (%)': (df['cpu_usage'], self.colors['cpu']),
@@ -89,8 +94,17 @@ class SystemMonitorVisualizer:
                 ax.grid(True, alpha=0.3)
                 ax.set_ylim(0, 100)
                 if data is not None and data.notna().any():
-                    ax.plot(df['datetime'], data, color=color, linewidth=2, alpha=0.8)
-                    ax.fill_between(df['datetime'], data, alpha=0.3, color=color)
+                    # 只繪製有數據的點，不連接缺失值
+                    valid_mask = data.notna()
+                    valid_times = df['datetime'][valid_mask]
+                    valid_data = data[valid_mask]
+                    
+                    # 繪製散點圖（主要）
+                    ax.scatter(valid_times, valid_data, color=color, s=20, alpha=0.8, zorder=3)
+                    
+                    # 只在連續數據點之間添加淡線連接（可選）
+                    if len(valid_data) > 1:
+                        ax.plot(valid_times, valid_data, color=color, linewidth=1, alpha=0.4, zorder=2)
                 else:
                     ax.text(0.5, 0.5, 'Not Available', ha='center', va='center', transform=ax.transAxes, fontsize=14, alpha=0.5)
                 self._format_xaxis(ax, (df['datetime'].max() - df['datetime'].min()).total_seconds())
@@ -107,14 +121,29 @@ class SystemMonitorVisualizer:
         df = self._prepare_data(metrics)
         if df.empty: raise ValueError("No data to plot")
 
+        # 獲取實際的時間範圍
+        start_time = df['datetime'].min().strftime('%m/%d %H:%M')
+        end_time = df['datetime'].max().strftime('%m/%d %H:%M')
+        date_range = f"{start_time} - {end_time}"
+
         with plt.style.context(self._dark_style_params):
             fig, ax = plt.subplots(1, 1, figsize=(14, 8))
             for key in ['cpu', 'ram', 'gpu', 'vram']:
                 col_name = f'{key}_usage'
                 if col_name in df.columns and df[col_name].notna().any():
-                    ax.plot(df['datetime'], df[col_name].fillna(0), color=self.colors[key], linewidth=2, label=key.upper(), alpha=0.8)
+                    # 只繪製有數據的點，不連接缺失值
+                    valid_mask = df[col_name].notna()
+                    valid_times = df['datetime'][valid_mask]
+                    valid_data = df[col_name][valid_mask]
+                    
+                    # 繪製散點圖（主要）
+                    ax.scatter(valid_times, valid_data, color=self.colors[key], s=15, alpha=0.8, zorder=3, label=key.upper())
+                    
+                    # 只在連續數據點之間添加淡線連接（可選）
+                    if len(valid_data) > 1:
+                        ax.plot(valid_times, valid_data, color=self.colors[key], linewidth=1, alpha=0.4, zorder=2)
             
-            ax.set_title('System Resource Usage Comparison', fontsize=16, fontweight='bold')
+            ax.set_title(f'System Resource Usage Comparison\n{date_range}', fontsize=16, fontweight='bold')
             ax.set_ylabel('Usage (%)', fontsize=12)
             ax.set_xlabel('Time', fontsize=12)
             ax.grid(True, alpha=0.3)
@@ -133,13 +162,30 @@ class SystemMonitorVisualizer:
         df = self._prepare_data(metrics)
         if df.empty: raise ValueError("No data to plot")
 
+        # 獲取實際的時間範圍
+        start_time = df['datetime'].min().strftime('%m/%d %H:%M')
+        end_time = df['datetime'].max().strftime('%m/%d %H:%M')
+        date_range = f"{start_time} - {end_time}"
+
         with plt.style.context(self._dark_style_params):
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+            fig.suptitle(f'Memory Usage Overview\n{date_range}', fontsize=16, fontweight='bold')
             
             # RAM 圖表
             if 'ram_used_gb' in df.columns and 'ram_total_gb' in df.columns:
-                ax1.plot(df['datetime'], df['ram_used_gb'], color=self.colors['ram'], linewidth=2, label='Used')
-                ax1.fill_between(df['datetime'], df['ram_used_gb'], alpha=0.3, color=self.colors['ram'])
+                # 只繪製有數據的點，不連接缺失值
+                valid_mask = df['ram_used_gb'].notna()
+                valid_times = df['datetime'][valid_mask]
+                valid_data = df['ram_used_gb'][valid_mask]
+                
+                if len(valid_data) > 0:
+                    # 繪製散點圖（主要）
+                    ax1.scatter(valid_times, valid_data, color=self.colors['ram'], s=15, alpha=0.8, zorder=3, label='Used')
+                    
+                    # 只在連續數據點之間添加淡線連接和填充（可選）
+                    if len(valid_data) > 1:
+                        ax1.plot(valid_times, valid_data, color=self.colors['ram'], linewidth=1, alpha=0.4, zorder=2)
+                        ax1.fill_between(valid_times, valid_data, alpha=0.2, color=self.colors['ram'])
                 
                 # 添加記憶體上限線
                 total_ram = df['ram_total_gb'].iloc[0] if 'ram_total_gb' in df.columns else 16.0
@@ -154,9 +200,20 @@ class SystemMonitorVisualizer:
 
             # VRAM 圖表  
             if 'vram_used_mb' in df.columns and df['vram_used_mb'].notna().any():
-                vram_used_gb = df['vram_used_mb'].fillna(0) / 1024
-                ax2.plot(df['datetime'], vram_used_gb, color=self.colors['vram'], linewidth=2, label='Used')
-                ax2.fill_between(df['datetime'], vram_used_gb, alpha=0.3, color=self.colors['vram'])
+                # 只繪製有數據的點，不連接缺失值
+                valid_mask = df['vram_used_mb'].notna()
+                valid_times = df['datetime'][valid_mask]
+                valid_data_mb = df['vram_used_mb'][valid_mask]
+                valid_data_gb = valid_data_mb / 1024
+                
+                if len(valid_data_gb) > 0:
+                    # 繪製散點圖（主要）
+                    ax2.scatter(valid_times, valid_data_gb, color=self.colors['vram'], s=15, alpha=0.8, zorder=3, label='Used')
+                    
+                    # 只在連續數據點之間添加淡線連接和填充（可選）
+                    if len(valid_data_gb) > 1:
+                        ax2.plot(valid_times, valid_data_gb, color=self.colors['vram'], linewidth=1, alpha=0.4, zorder=2)
+                        ax2.fill_between(valid_times, valid_data_gb, alpha=0.2, color=self.colors['vram'])
                 
                 # 添加VRAM上限線
                 if 'vram_total_mb' in df.columns:
@@ -173,7 +230,7 @@ class SystemMonitorVisualizer:
             ax2.legend()
             ax2.grid(True, alpha=0.3)
             self._format_xaxis(ax2, (df['datetime'].max() - df['datetime'].min()).total_seconds())
-            plt.tight_layout()
+            plt.tight_layout(rect=[0, 0, 1, 0.94])
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 output_path = self.subdirs['memory'] / f'memory_usage_{timestamp}.png'
@@ -184,6 +241,11 @@ class SystemMonitorVisualizer:
     def plot_usage_distribution(self, metrics: List[Dict], output_path: Optional[str] = None) -> str:
         df = self._prepare_data(metrics)
         if df.empty: raise ValueError("No data to plot")
+
+        # 獲取實際的時間範圍
+        start_time = df['datetime'].min().strftime('%m/%d %H:%M')
+        end_time = df['datetime'].max().strftime('%m/%d %H:%M')
+        date_range = f"{start_time} - {end_time}"
 
         with plt.style.context(self._dark_style_params):
             plot_data = {
@@ -197,6 +259,7 @@ class SystemMonitorVisualizer:
             if n_plots == 0: raise ValueError("No data for distribution plot")
 
             fig, axes = plt.subplots((n_plots + 1) // 2, 2, figsize=(12, 6 * ((n_plots + 1) // 2)))
+            fig.suptitle(f'Usage Distribution Analysis\n{date_range}', fontsize=16, fontweight='bold')
             axes = axes.flatten()
             for i, (title, data) in enumerate(valid_plots.items()):
                 axes[i].hist(data, bins=20, color=self.colors[title.lower()], alpha=0.7, edgecolor='#cccccc')
@@ -204,7 +267,7 @@ class SystemMonitorVisualizer:
                 axes[i].set_xlabel('Usage (%)')
                 axes[i].set_ylabel('Frequency')
             for i in range(n_plots, len(axes)): axes[i].set_visible(False)
-            plt.tight_layout()
+            plt.tight_layout(rect=[0, 0, 1, 0.94])
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 output_path = self.subdirs['distribution'] / f'usage_distribution_{timestamp}.png'

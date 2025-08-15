@@ -70,6 +70,11 @@ class SystemMonitor:
                 # 收集 GPU 進程數據
                 gpu_processes = self.collector.get_top_gpu_processes(limit=5)
                 
+                # 防禦性程式設計：確保傳遞給資料庫的數據不含None
+                for key in ['gpu_usage', 'vram_usage', 'vram_used_mb', 'vram_total_mb', 'gpu_temperature']:
+                    if data.get(key) is None:
+                        data[key] = 0
+
                 # 存儲到數據庫
                 success = self.database.insert_metrics(data)
                 

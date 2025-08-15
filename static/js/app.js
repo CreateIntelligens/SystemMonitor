@@ -185,8 +185,25 @@ async function showGpuProcesses() {
                 start_time: proc.start_time || 'Unknown'
             }));
         } else {
-            // 載入歷史進程
-            response = await fetch(`/api/all-processes/${timespan}`);
+            // 載入歷史進程，傳遞資料庫參數
+            const databaseSelect = document.getElementById('database-select');
+            const customDatabaseInput = document.getElementById('custom-database-input');
+            let selectedDatabase = 'monitoring.db';
+            
+            if (databaseSelect && databaseSelect.value === 'custom') {
+                selectedDatabase = customDatabaseInput ? customDatabaseInput.value.trim() : 'monitoring.db';
+            } else if (databaseSelect && databaseSelect.value !== 'monitoring.db') {
+                selectedDatabase = databaseSelect.value;
+            }
+            
+            const requestBody = selectedDatabase !== 'monitoring.db' ? 
+                { database_file: selectedDatabase } : {};
+            
+            response = await fetch(`/api/all-processes/${timespan}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
             data = await response.json();
             
             if (data.success) {
@@ -233,25 +250,27 @@ function renderProcessTable(processes, containerId, title) {
             '載入中...';
         html = `<h3>📊 即時進程 (自動更新) <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);">${updateTimeStr}</span></h3>`;
         if (processes.length > 0) {
-            const headers = '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>PID</th><th>容器來源</th><th>進程名</th><th>指令</th><th>GPU記憶體</th><th>CPU %</th><th>RAM (GB)</th><th>啟動時間</th>';
-            html += `<table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
+            const headers = '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>PID</th><th>容器來源</th><th>進程名</th><th>指令</th><th>GPU記憶體</th><th>GPU使用率</th><th>CPU %</th><th>RAM (GB)</th><th>啟動時間</th>';
+            html += `<div class="process-table-container"><table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
             
             processes.forEach(proc => {
-                let memoryDisplay = proc.gpu_memory_mb > 0 ? `${proc.gpu_memory_mb} MB` : 'N/A';
-                const containerDisplay = proc.container_source || proc.container || '主機';
-                html += `<tr>
+                    let memoryDisplay = proc.gpu_memory_mb > 0 ? `${proc.gpu_memory_mb} MB` : 'N/A';
+                    const containerDisplay = proc.container_source || proc.container || '主機';
+                    const gpuUtilDisplay = proc.gpu_utilization > 0 ? `${proc.gpu_utilization}%` : 'N/A';
+                    html += `<tr>
                     <td><input type="checkbox" class="process-checkbox" data-pid="${proc.pid}"></td>
                     <td>${proc.pid}</td>
                     <td title="${containerDisplay}">${containerDisplay}</td>
                     <td>${proc.name}</td>
                     <td class="command-cell" title="${proc.command}">${proc.command}</td>
                     <td>${memoryDisplay}</td>
+                    <td>${gpuUtilDisplay}</td>
                     <td>${proc.cpu_percent}%</td>
                     <td>${(proc.ram_mb / 1024).toFixed(2)}</td>
                     <td>${proc.start_time}</td>
                 </tr>`;
-            });
-            html += '</tbody></table>';
+                });
+            html += '</tbody></table></div>';
         } else {
             html += '<p>目前沒有運行中的GPU進程。</p>';
         }
@@ -276,7 +295,7 @@ function renderProcessTable(processes, containerId, title) {
         
         if (processes.length > 0) {
             const headers = '<th><input type="checkbox" id="select-all-processes" onclick="toggleSelectAll(this)"></th><th>狀態</th><th>PID</th><th>進程名</th><th>指令</th><th>平均GPU記憶體</th><th>平均CPU %</th><th>平均RAM (GB)</th><th>首次記錄</th><th>最後記錄</th><th>記錄數</th>';
-            html += `<table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
+            html += `<div class="process-table-container"><table class="process-table"><thead><tr>${headers}</tr></thead><tbody>`;
             
             processes.forEach(proc => {
                 let memoryDisplay = proc.gpu_memory_mb > 0 ? `${proc.gpu_memory_mb} MB` : 'N/A';
@@ -296,7 +315,7 @@ function renderProcessTable(processes, containerId, title) {
                     <td>${proc.record_count || 0}</td>
                 </tr>`;
             });
-            html += '</tbody></table>';
+            html += '</tbody></table></div>';
         } else {
             html += '<p>該時間範圍內沒有找到進程記錄。</p>';
         }
