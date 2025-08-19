@@ -52,12 +52,9 @@ class GPUCollector:
                 client = attempt()
                 # 測試連接
                 client.ping()
-                print(f"[DEBUG] Docker客戶端連接成功: {client.api.base_url}")
                 return client
             except Exception as e:
                 continue
-                
-        print("[WARNING] 無法連接到Docker API，將無法識別容器來源")
         return None
     
     def _init_nvml(self):
@@ -68,11 +65,8 @@ class GPUCollector:
         try:
             pynvml.nvmlInit()
             self.nvml_initialized = True
-            if self.debug:
-                print("[DEBUG] NVML 初始化成功")
         except Exception as e:
-            if self.debug:
-                print(f"[WARNING] NVML 初始化失敗: {e}")
+            pass
     
     def get_pid_gpu_info(self, target_pid: int) -> Optional[Dict]:
         """使用 NVML 查詢特定 PID 的 GPU 使用情況，包含 VRAM 和 GPU 使用率"""
@@ -136,7 +130,7 @@ class GPUCollector:
             
         except Exception as e:
             if self.debug:
-                print(f"[WARNING] NVML 查詢 PID {target_pid} 失敗: {e}")
+                pass
             return None
     
     def _build_pid_namespace_map(self) -> Dict[int, int]:
@@ -270,7 +264,7 @@ class GPUCollector:
             except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
                 continue
                 
-        print("[WARNING] 所有 nvidia-smi 檢測方法都失敗，將無法監控GPU")
+        pass
         return False
     
     def get_gpu_stats(self) -> Optional[Dict]:

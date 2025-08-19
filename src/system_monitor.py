@@ -4,6 +4,7 @@
 """
 
 import argparse
+import os
 import sys
 import time
 import signal
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from core import SystemMonitorCollector, MonitoringDatabase, SystemMonitorVisualizer
+from core.weekly_db_manager import weekly_db_manager
 from utils import Config, setup_logger
 
 # 可選的 Web 相關導入
@@ -29,7 +31,8 @@ class SystemMonitor:
     def __init__(self, config=None):
         """初始化系統監控"""
         self.config = config or Config()
-        self.db_path = self.config.database_path
+        # 使用週週分檔資料庫系統
+        self.db_path = weekly_db_manager.get_current_database_path()
         self.interval = self.config.monitoring_interval
         self.running = False
         
@@ -41,6 +44,8 @@ class SystemMonitor:
         
         # 初始化組件
         self.collector = SystemMonitorCollector()
+        # 確保當前週資料庫存在
+        weekly_db_manager.ensure_current_database_exists()
         self.database = MonitoringDatabase(self.db_path)
         self.visualizer = SystemMonitorVisualizer()
         self.visualizer.output_dir = Path(self.config.plots_dir)
@@ -64,6 +69,15 @@ class SystemMonitor:
         
         while self.running:
             try:
+                # 檢查是否需要切換到新的週資料庫
+                current_db_path = weekly_db_manager.get_current_database_path()
+                if current_db_path != self.db_path:
+                    print(f"📅 切換到新的週資料庫: {Path(current_db_path).name}")
+                    self.db_path = current_db_path
+                    weekly_db_manager.ensure_current_database_exists()
+                    # 重新初始化資料庫連接
+                    self.database = MonitoringDatabase(self.db_path)
+                
                 # 收集基本系統數據
                 data = self.collector.collect_simple()
                 
@@ -91,21 +105,14 @@ class SystemMonitor:
                     ram_total = data.get('ram_total_gb', 0)
                     ram_percent = data.get('ram_usage', 0)
                     
-                    status = f"⏰ {timestamp} | 🖥️  CPU: {cpu:.1f}% | 💾 RAM: {ram_used:.1f}GB/{ram_total:.1f}GB ({ram_percent:.1f}%)"
+                    status = f"{timestamp} | CPU:{cpu:.1f}% RAM:{ram_used:.1f}/{ram_total:.1f}GB({ram_percent:.1f}%)"
                     
                     if data.get('gpu_usage') is not None:
                         gpu = data.get('gpu_usage', 0)
                         vram = data.get('vram_usage', 0)
-                        status += f" | 🎮 GPU: {gpu:.1f}% | 📈 VRAM: {vram:.1f}%"
-                    
-                    # 顯示頂級 GPU 進程信息
-                    cpu_source = data.get('cpu_source', 'N/A')
-                    ram_source = data.get('ram_source', 'N/A')
-                    status += f" (src: {cpu_source}/{ram_source})"
+                        status += f" GPU:{gpu:.1f}% VRAM:{vram:.1f}%"
                     
                     print(status)
-                else:
-                    print("❌ 數據存儲失敗")
                 
                 time.sleep(self.interval)
                 
@@ -119,16 +126,9 @@ class SystemMonitor:
             print("⚠️  監控已在運行中")
             return
         
-        print("🚀 啟動系統監控")
-        print(f"📁 數據庫: {self.db_path}")
-        print(f"⏱️  收集間隔: {self.interval} 秒")
-        
-        if self.collector.is_gpu_available():
-            print("✅ NVIDIA GPU 可用")
-        else:
-            print("⚠️  NVIDIA GPU 不可用，將只監控 CPU/RAM")
-        
-        print("-" * 70)
+        print(f"🚀 啟動系統監控 | 間隔:{self.interval}s | GPU:{'是' if self.collector.is_gpu_available() else '否'}")
+        print(f"📁 {Path(self.db_path).name}")
+        print("-" * 50)
         
         self.running = True
         self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
@@ -252,41 +252,37 @@ class SystemMonitor:
         """生成圖表"""
         print(f"📊 生成 {timespan} 圖表...")
         
-        metrics = self.database.get_metrics_by_timespan(timespan)
+        # 獲取需要查詢的資料庫列表
+        db_paths = weekly_db_manager.get_database_for_timespan(timespan)
         
-        if not metrics:
+        # 合併所有資料庫的數據
+        all_metrics = []
+        for db_path in db_paths:
+            if os.path.exists(db_path):
+                temp_db = MonitoringDatabase(db_path)
+                metrics = temp_db.get_metrics_by_timespan(timespan)
+                if metrics:
+                    all_metrics.extend(metrics)
+        
+        if not all_metrics:
             print("❌ 沒有數據可生成圖表")
             return
         
-        print(f"📈 找到 {len(metrics)} 條記錄")
+        # 按時間排序
+        all_metrics.sort(key=lambda x: x.get('timestamp', ''))
+        print(f"📈 合併 {len(db_paths)} 個資料庫，共 {len(all_metrics)} 條記錄")
         
         if output_dir:
             self.visualizer.output_dir = Path(output_dir)
             self.visualizer.output_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            print("🔄 生成系統概覽圖...")
-            overview_path = self.visualizer.plot_system_overview(metrics, timespan=timespan)
-            print(f"✅ 系統概覽圖: {overview_path}")
+            overview_path = self.visualizer.plot_system_overview(all_metrics, timespan=timespan)
+            comparison_path = self.visualizer.plot_resource_comparison(all_metrics)
+            memory_path = self.visualizer.plot_memory_usage(all_metrics)
+            distribution_path = self.visualizer.plot_usage_distribution(all_metrics)
             
-            print("🔄 生成資源對比圖...")
-            comparison_path = self.visualizer.plot_resource_comparison(metrics)
-            print(f"✅ 資源對比圖: {comparison_path}")
-            
-            print("🔄 生成記憶體使用圖...")
-            memory_path = self.visualizer.plot_memory_usage(metrics)
-            print(f"✅ 記憶體使用圖: {memory_path}")
-            
-            print("🔄 生成使用率分佈圖...")
-            distribution_path = self.visualizer.plot_usage_distribution(metrics)
-            print(f"✅ 使用率分佈圖: {distribution_path}")
-            
-            print("📋 統計摘要:")
-            stats = self.visualizer.generate_summary_stats(metrics)
-            for key, value in stats.items():
-                print(f"  {key}: {value}")
-            
-            print(f"\n✅ 所有圖表已生成完成")
+            print(f"✅ 圖表已生成: 系統概覽、資源對比、記憶體使用、使用率分佈")
             
         except Exception as e:
             print(f"❌ 生成圖表失敗: {e}")
@@ -318,11 +314,8 @@ class SystemMonitor:
         host = host or self.config.web_host
         port = port or self.config.web_port
         
-        print(f"🌐 啟動 FastAPI Web 介面...")
-        print(f"📍 訪問地址: http://{host}:{port}")
-        print(f"🗂️  數據庫: {self.db_path}")
-        print(f"📊 圖表目錄: {self.visualizer.output_dir}")
-        print(f"📖 API 文檔: http://{host}:{port}/docs")
+        print(f"🌐 啟動 Web 介面: http://{host}:{port}")
+        print(f"📁 數據庫: {Path(self.db_path).name} | 圖表: {self.visualizer.output_dir}")
         
         app = create_web_app(self)
         uvicorn.run(app, host=host, port=port, log_level="info" if debug else "warning")

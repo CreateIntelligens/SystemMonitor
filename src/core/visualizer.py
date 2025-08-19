@@ -301,14 +301,21 @@ class SystemMonitorVisualizer:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp')
 
+        # 限制顯示進程數量，避免 legend 過長
+        all_pids = df['pid'].unique()
+        display_pids = all_pids[:5]  # 只顯示前5個進程
+
         with plt.style.context(self._dark_style_params):
             fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-            fig.suptitle(f'Process Timeline: {process_name} ({timespan})', fontsize=16, fontweight='bold')
             
-            pids = df['pid'].unique()[:6]
+            # 設定標題，如果有更多進程則顯示說明
+            if len(all_pids) > 5:
+                fig.suptitle(f'Process Timeline: {process_name} - Top 5 of {len(all_pids)} processes ({timespan})', fontsize=16, fontweight='bold')
+            else:
+                fig.suptitle(f'Process Timeline: {process_name} ({timespan})', fontsize=16, fontweight='bold')
             colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57', '#FF9FF3']
             
-            for i, pid in enumerate(pids):
+            for i, pid in enumerate(display_pids):
                 pid_data = df[df['pid'] == pid]
                 color, label = colors[i % len(colors)], f'PID {pid}'
                 ax1.plot(pid_data['timestamp'], pid_data['gpu_memory_mb'], color=color, marker='o', markersize=3, label=label, alpha=0.8)
@@ -406,9 +413,17 @@ class SystemMonitorVisualizer:
             fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16), sharex=True)
             fig.suptitle(f'Processes Comparison ({timespan})', fontsize=16, fontweight='bold')
 
-            colors = plt.cm.viridis(np.linspace(0, 1, len(pids)))
+            # 限制顯示進程數量，避免 legend 過長
+            display_pids = pids[:5]  # 只顯示前5個進程
+            colors = plt.cm.viridis(np.linspace(0, 1, len(display_pids) + 1))  # +1 for total
+            
+            # 記錄總計數據
+            total_cpu_data = None
+            total_ram_data = None
+            total_gpu_memory_data = None
+            timestamps = None
 
-            for i, pid in enumerate(pids):
+            for i, pid in enumerate(display_pids):
                 pid_data = df[df['pid'] == pid]
                 if pid_data.empty:
                     continue
@@ -447,6 +462,34 @@ class SystemMonitorVisualizer:
                 # GPU 記憶體 - 確保非負值，轉換為 GB
                 gpu_memory_data = pid_data['gpu_memory_mb'].clip(lower=0) / 1024
                 ax4.plot(pid_data['timestamp'], gpu_memory_data, color=color, label=label, alpha=0.8)
+                
+                # 累加總計數據
+                if timestamps is None:
+                    timestamps = pid_data['timestamp']
+                    total_cpu_data = cpu_data.copy()
+                    total_ram_data = ram_data.copy()
+                    total_gpu_memory_data = gpu_memory_data.copy()
+                else:
+                    # 對時間戳對齊並累加（簡化處理，假設時間戳相同）
+                    if len(cpu_data) == len(total_cpu_data):
+                        total_cpu_data += cpu_data
+                        total_ram_data += ram_data
+                        total_gpu_memory_data += gpu_memory_data
+            
+            # 繪製總計線（如果有多個進程）
+            if len(display_pids) > 1 and timestamps is not None:
+                total_color = colors[-1]  # 使用最後一個顏色
+                ax1.plot(timestamps, total_cpu_data, color=total_color, label='Total CPU', 
+                        linewidth=2, linestyle='--', alpha=1.0)
+                ax3.plot(timestamps, total_ram_data, color=total_color, label='Total RAM', 
+                        linewidth=2, linestyle='--', alpha=1.0)
+                ax4.plot(timestamps, total_gpu_memory_data, color=total_color, label='Total GPU Memory', 
+                        linewidth=2, linestyle='--', alpha=1.0)
+            
+            # 如果有被省略的進程，添加說明
+            if len(pids) > 5:
+                fig.suptitle(f'Processes Comparison - Top 5 of {len(pids)} selected ({timespan})', 
+                           fontsize=16, fontweight='bold')
 
             # CPU 使用率圖表 (左上)
             ax1.set_title('CPU Usage Comparison')

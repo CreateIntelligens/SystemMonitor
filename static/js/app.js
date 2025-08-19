@@ -3,6 +3,7 @@ let allGpuProcesses = [];
 let activeFilters = [];
 let currentMode = 'monitor'; // 'monitor' 或 'stats'
 let lastUpdateTime = null;
+let statusInterval = null;
 
 // --- **新** 時鐘功能 ---
 function updateClock() {
@@ -28,6 +29,52 @@ async function loadStatus() {
     } catch (error) {
         console.error('載入狀態失敗:', error);
     }
+}
+
+// 載入週資料庫列表
+async function loadWeeklyDatabases() {
+    try {
+        const response = await fetch('/api/databases');
+        const data = await response.json();
+        
+        if (data.success && data.databases) {
+            updateDatabaseSelectors(data.databases);
+        }
+    } catch (error) {
+        console.error('載入週資料庫列表失敗:', error);
+    }
+}
+
+// 更新資料庫選擇器
+function updateDatabaseSelectors(databases) {
+    const selectors = [
+        document.getElementById('database-select'),
+        document.getElementById('system-database-select')
+    ];
+    
+    selectors.forEach(select => {
+        if (!select) return;
+        
+        // 清除現有選項
+        select.innerHTML = '<option value="">週週分檔 (自動合併)</option>';
+        
+        // 添加週資料庫選項
+        databases.forEach(db => {
+            const option = document.createElement('option');
+            option.value = db.filename;
+            option.textContent = `${db.display_name} (${db.size_mb}MB)`;
+            if (db.is_current) {
+                option.textContent += ' [當前]';
+            }
+            select.appendChild(option);
+        });
+        
+        // 添加自定義選項
+        const customOption = document.createElement('option');
+        customOption.value = 'custom';
+        customOption.textContent = '其他資料庫...';
+        select.appendChild(customOption);
+    });
 }
 
 function updateStatusDisplay(data) {
@@ -56,12 +103,14 @@ function updateSettingsDisplay() {
     if (!settingsText) return;
     
     // 獲取資料庫資訊
-    let databaseInfo = '本機資料庫 (monitoring.db)';
+    let databaseInfo = '週週分檔 (自動合併)';
     if (databaseSelect && databaseSelect.value === 'custom') {
         const customDb = customDbInput ? customDbInput.value.trim() : '';
         databaseInfo = customDb ? `其他資料庫 (${customDb})` : '其他資料庫 (未指定)';
-    } else if (databaseSelect && databaseSelect.value !== 'monitoring.db') {
-        databaseInfo = `其他資料庫 (${databaseSelect.value})`;
+    } else if (databaseSelect && databaseSelect.value && databaseSelect.value !== '') {
+        // 顯示選定的週資料庫
+        const selectedOption = databaseSelect.options[databaseSelect.selectedIndex];
+        databaseInfo = selectedOption ? selectedOption.text : databaseSelect.value;
     }
     
     // 獲取時間範圍資訊
@@ -490,10 +539,23 @@ async function plotSelectedProcesses() {
     chartContainer.innerHTML = `<div class="loading"><h3>⏳ 正在生成進程圖表...</h3></div>`;
     try {
         console.log('🔍 發送進程繪圖請求:', { pids: checkedPIDs, timespan: timespan });
+        // 獲取當前選中的資料庫
+        const databaseSelect = document.getElementById('database-select');
+        const customDatabaseInput = document.getElementById('custom-database-input');
+        let selectedDatabase = 'monitoring.db';
+        
+        if (databaseSelect && databaseSelect.value === 'custom') {
+            selectedDatabase = customDatabaseInput ? customDatabaseInput.value.trim() : 'monitoring.db';
+        } else if (databaseSelect && databaseSelect.value !== 'monitoring.db') {
+            selectedDatabase = databaseSelect.value;
+        }
+        
+        console.log('🔍 畫圖請求參數:', { pids: checkedPIDs, timespan: timespan, database_file: selectedDatabase });
+        
         const response = await fetch('/api/processes/plot-comparison', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pids: checkedPIDs, timespan: timespan })
+            body: JSON.stringify({ pids: checkedPIDs, timespan: timespan, database_file: selectedDatabase })
         });
         const result = await response.json();
         console.log('🔍 API 返回結果:', result);
@@ -573,20 +635,22 @@ async function generateChart(timespan) {
         // 獲取選定的資料庫（使用系統圖表的選擇器）
         const systemDatabaseSelect = document.getElementById('system-database-select');
         const systemCustomDbInput = document.getElementById('system-custom-database-input');
-        let selectedDatabase = 'monitoring.db';
+        let selectedDatabase = null; // 預設為 null，表示使用週週分檔系統
         
-        if (systemDatabaseSelect && systemDatabaseSelect.value === 'custom') {
-            selectedDatabase = systemCustomDbInput ? systemCustomDbInput.value.trim() : 'monitoring.db';
-            if (!selectedDatabase) {
-                alert('請輸入自定義資料庫檔案名稱');
-                return;
+        if (systemDatabaseSelect) {
+            if (systemDatabaseSelect.value === 'custom') {
+                selectedDatabase = systemCustomDbInput ? systemCustomDbInput.value.trim() : null;
+                if (!selectedDatabase) {
+                    alert('請輸入自定義資料庫檔案名稱');
+                    return;
+                }
+            } else if (systemDatabaseSelect.value && systemDatabaseSelect.value !== '') {
+                selectedDatabase = systemDatabaseSelect.value;
             }
-        } else if (systemDatabaseSelect && systemDatabaseSelect.value !== 'monitoring.db') {
-            selectedDatabase = systemDatabaseSelect.value;
         }
         
         // 構建請求體
-        const requestBody = selectedDatabase !== 'monitoring.db' ? 
+        const requestBody = selectedDatabase ? 
             { database_file: selectedDatabase } : {};
         
         const response = await fetch(`/api/plot/${timespan}`, { 
@@ -621,6 +685,7 @@ window.onload = function() {
 
     // 載入初始數據
     loadStatus();
+    loadWeeklyDatabases(); // 載入週資料庫列表
     
     // 初始化模式狀態（確保UI與currentMode同步）
     switchMode(currentMode);
@@ -628,6 +693,10 @@ window.onload = function() {
     // 初始載入（即時模式才自動載入）
     if (currentMode === 'monitor') {
         showGpuProcesses();
+        // 啟動自動更新狀態
+        if (!statusInterval) {
+            statusInterval = setInterval(loadStatus, 2000);
+        }
     }
 
     // 綁定事件監聽器
@@ -713,7 +782,7 @@ window.onload = function() {
             
             // 恢復自動更新
             if (statusInterval) clearInterval(statusInterval);
-            statusInterval = setInterval(fetchSystemStatus, 2000);
+            statusInterval = setInterval(loadStatus, 2000);
             
         } else {
             // 歷史模式
