@@ -33,6 +33,12 @@ print_usage() {
     echo "  plot [範圍]     生成系統圖表 (1h/6h/24h/7d/30d)"
     echo "  plot-processes  繪製進程對比圖"
     echo
+    if [[ -f /.dockerenv ]]; then
+        echo "🐳 容器內快速指令:"
+        echo "  monitor         直接啟動監控（背景執行）"
+        echo "  web             直接啟動Web服務"
+    fi
+    echo
     echo "🐳 Docker 指令:"
     echo "  start-web       啟動 Web 服務"
     echo "  start-monitor   啟動監控服務（會詢問執行方式）"
@@ -529,8 +535,10 @@ show_service_status() {
 main() {
     print_header
     
-    # 檢查 Docker
-    check_docker
+    # 只在容器外檢查 Docker
+    if [[ ! -f /.dockerenv ]]; then
+        check_docker
+    fi
     
     # 處理指令
     case "${1:-help}" in
@@ -561,6 +569,24 @@ main() {
         # 監控指令
         "start")
             start_monitor
+            ;;
+        "monitor")
+            # 容器內直接啟動監控（背景執行）
+            if [[ -f /.dockerenv ]]; then
+                start_monitor_local
+            else
+                echo -e "${YELLOW}⚠️  此指令僅適用於容器內環境，請使用 'start'${NC}"
+            fi
+            ;;
+        "web")
+            # 容器內直接啟動Web服務
+            if [[ -f /.dockerenv ]]; then
+                WEB_PORT=${WEB_PORT:-5000}
+                echo -e "${GREEN}🌐 在容器內啟動Web服務 (端口: $WEB_PORT)...${NC}"
+                exec python app.py --host 0.0.0.0 --port $WEB_PORT
+            else
+                echo -e "${YELLOW}⚠️  此指令僅適用於容器內環境，請使用 'start-web'${NC}"
+            fi
             ;;
         "stop")
             stop_monitor

@@ -10,6 +10,7 @@ import re
 import json
 import time
 import requests
+import platform
 from datetime import datetime
 from typing import Dict, Optional, List
 try:
@@ -502,15 +503,19 @@ class GPUCollector:
                                     if self.debug:
                                         print(f"[DEBUG] 關鍵字搜索檢查了 {search_count} 個進程")
                         
-                        # 對於Windows WDDM模式，無法獲得進程級別的VRAM，但可以記錄進程存在
+                        # 無法獲得進程級別的VRAM，但可以記錄進程存在
                         if not target_pid:
                             if self.debug:
                                 print(f"[DEBUG] 無法找到 NVML PID {nvml_pid} 對應的主機PID")
-                                # 在WDDM模式下，嘗試記錄Graphics進程資訊
+                                # 嘗試記錄GPU進程資訊
                                 try:
                                     proc_name = pynvml.nvmlSystemGetProcessName(nvml_pid)
                                     if proc_name and not proc_name.startswith('/X'):  # 排除X11相關進程
-                                        print(f"[DEBUG] Windows WDDM模式 - 發現GPU進程但無法映射PID: {proc_name}")
+                                        is_windows = platform.system().lower() == 'windows'
+                                        if is_windows:
+                                            print(f"[DEBUG] Windows WDDM模式 - 發現GPU進程但無法映射PID: {proc_name}")
+                                        else:
+                                            print(f"[DEBUG] NVML限制模式 - 發現GPU進程但無法映射PID: {proc_name}")
                                 except:
                                     pass
                             continue
@@ -584,13 +589,15 @@ class GPUCollector:
         elif not processes:  # 只有當NVML沒找到進程時才用nvidia-smi
             if self.debug:
                 print("[DEBUG] NVML 已初始化但未找到進程，使用 nvidia-smi 作為備用方案。")
-                # 在Windows WDDM模式下，提供總體GPU使用情況
+                # 提供總體GPU使用情況
                 try:
                     gpu_stats = self.get_gpu_stats()
                     if gpu_stats and len(gpu_stats) > 0:
                         gpu_info = gpu_stats[0]
                         if gpu_info.get('gpu_usage', 0) > 0 or gpu_info.get('vram_used_mb', 0) > 1000:
-                            print(f"[DEBUG] Windows WDDM模式 - GPU正在使用中:")
+                            is_windows = platform.system().lower() == 'windows'
+                            mode_name = "Windows WDDM模式" if is_windows else "NVML限制模式"
+                            print(f"[DEBUG] {mode_name} - GPU正在使用中:")
                             print(f"[DEBUG]   - GPU使用率: {gpu_info.get('gpu_usage', 0)}%")
                             print(f"[DEBUG]   - VRAM使用: {gpu_info.get('vram_used_mb', 0)}MB / {gpu_info.get('vram_total_mb', 0)}MB")
                             print(f"[DEBUG]   - 溫度: {gpu_info.get('temperature', 0)}°C")
@@ -782,17 +789,21 @@ class GPUCollector:
                         if self.debug:
                             print(f"🎯 NVML 確認 PID={p.pid} 使用 GPU {nvml_info['gpu_id']}, VRAM={gpu_memory_mb}MB, Util={gpu_utilization}%")
                     else:
-                        # Windows WDDM模式下，無法獲得進程級VRAM，但可以根據關鍵字推測
+                        # NVML 無法獲得進程級GPU資訊，使用關鍵字推測
                         if has_gpu_keywords:
                             # 檢查GPU是否正在被大量使用
                             try:
                                 gpu_stats = self.get_gpu_stats()
                                 if gpu_stats and len(gpu_stats) > 0:
                                     gpu_info = gpu_stats[0]
+                                    is_windows = platform.system().lower() == 'windows'
                                     if gpu_info.get('gpu_usage', 0) > 80:  # GPU使用率>80%
                                         proc_type = f"🔥 可能的GPU進程 (系統GPU: {gpu_info.get('gpu_usage', 0)}%)"
                                         if self.debug:
-                                            print(f"🔥 Windows WDDM模式 - 高GPU使用率時發現關鍵字進程: PID={p.pid}, 名稱={proc_name}")
+                                            if is_windows:
+                                                print(f"🔥 Windows WDDM模式 - 高GPU使用率時發現關鍵字進程: PID={p.pid}, 名稱={proc_name}")
+                                            else:
+                                                print(f"🔥 NVML限制模式 - 高GPU使用率時發現關鍵字進程: PID={p.pid}, 名稱={proc_name}")
                                     elif self.debug:
                                         print(f"🔍 關鍵字匹配但GPU使用率低: PID={p.pid}, 名稱={proc_name}")
                                 elif self.debug:
