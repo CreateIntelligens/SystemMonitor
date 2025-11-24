@@ -315,21 +315,29 @@ export function ChartPanel() {
 
       {/* Charts Grid (System mode) */}
       {chartMode === 'system' && charts.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="flex flex-col gap-8 items-center">
           {charts.map((chart, index) => (
             <div
               key={index}
-              className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden cursor-pointer hover:border-gray-600 transition-colors"
+              className="w-full max-w-4xl bg-gray-900 rounded-xl border border-gray-800 overflow-hidden cursor-pointer hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/10 transition-all duration-300 group"
               onClick={() => setExpandedChart(chart)}
             >
-              <div className="p-3 border-b border-gray-800 text-sm font-medium text-gray-300">
-                {chart.title}
+              <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-800/50">
+                <span className="font-medium text-gray-200 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-blue-400" />
+                  {chart.title}
+                </span>
+                <span className="text-xs text-gray-500 group-hover:text-blue-400 transition-colors">
+                  點擊放大
+                </span>
               </div>
-              <img
-                src={`/plots/${chart.path}?t=${Date.now()}`}
-                alt={chart.title}
-                className="w-full h-auto"
-              />
+              <div className="p-4 bg-gray-900/50 flex justify-center">
+                <img
+                  src={`/plots/${chart.path}?t=${Date.now()}`}
+                  alt={chart.title}
+                  className="w-full h-auto max-h-[600px] object-contain rounded-lg"
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -337,19 +345,28 @@ export function ChartPanel() {
 
       {/* GPU Chart (GPU mode) */}
       {chartMode === 'gpu' && gpuChart && (
-        <div
-          className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden cursor-pointer hover:border-gray-600 transition-colors"
-          onClick={() => setExpandedChart(gpuChart)}
-        >
-          <div className="p-3 border-b border-gray-800 text-sm font-medium text-gray-300 flex items-center gap-2">
-            <Cpu className="w-4 h-4 text-green-400" />
-            {gpuChart.title}
+        <div className="flex justify-center">
+          <div
+            className="w-full max-w-5xl bg-gray-900 rounded-xl border border-gray-800 overflow-hidden cursor-pointer hover:border-green-500/50 hover:shadow-lg hover:shadow-green-500/10 transition-all duration-300 group"
+            onClick={() => setExpandedChart(gpuChart)}
+          >
+            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-800/50">
+              <span className="font-medium text-gray-200 flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-green-400" />
+                {gpuChart.title}
+              </span>
+              <span className="text-xs text-gray-500 group-hover:text-green-400 transition-colors">
+                點擊放大
+              </span>
+            </div>
+            <div className="p-4 bg-gray-900/50 flex justify-center">
+              <img
+                src={`/plots/${gpuChart.path}?t=${Date.now()}`}
+                alt={gpuChart.title}
+                className="w-full h-auto max-h-[700px] object-contain rounded-lg"
+              />
+            </div>
           </div>
-          <img
-            src={`/plots/${gpuChart.path}?t=${Date.now()}`}
-            alt={gpuChart.title}
-            className="w-full h-auto"
-          />
         </div>
       )}
 

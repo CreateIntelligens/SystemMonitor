@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 import uvicorn
 from pydantic import BaseModel
 from typing import List
@@ -297,17 +298,11 @@ async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
         if not metrics:
             return {"success": False, "error": f"資料庫 {db_name} 中沒有 {timespan} 時間範圍的數據"}
         
-        # 生成圖表（只生成 3 張圖）
+        # 生成圖表（只生成 1 張圖：CPU+RAM 和 GPU+VRAM）
         charts = []
 
-        overview_path = visualizer.plot_system_overview(metrics, timespan=timespan)
+        overview_path = await run_in_threadpool(visualizer.plot_system_overview, metrics, timespan=timespan)
         charts.append({"title": f"系統概覽 ({db_name})", "path": Path(overview_path).relative_to("plots")})
-
-        memory_path = visualizer.plot_memory_usage(metrics)
-        charts.append({"title": f"記憶體使用 ({db_name})", "path": Path(memory_path).relative_to("plots")})
-
-        distribution_path = visualizer.plot_usage_distribution(metrics)
-        charts.append({"title": f"使用率分佈 ({db_name})", "path": Path(distribution_path).relative_to("plots")})
 
         return {"success": True, "charts": charts, "database": db_name}
 
@@ -350,7 +345,7 @@ async def generate_gpu_plot(timespan: str, req: MultiGPUPlotRequest = None):
                 return {"success": False, "error": f"沒有 GPU 指標數據"}
 
             # 生成圖表
-            chart_path = visualizer.plot_multi_gpu(all_metrics, gpu_ids=gpu_ids, timespan=timespan)
+            chart_path = await run_in_threadpool(visualizer.plot_multi_gpu, all_metrics, gpu_ids=gpu_ids, timespan=timespan)
 
             return {
                 "success": True,
@@ -367,7 +362,7 @@ async def generate_gpu_plot(timespan: str, req: MultiGPUPlotRequest = None):
         if not gpu_metrics:
             return {"success": False, "error": f"資料庫 {db_name} 中沒有 GPU 指標數據"}
 
-        chart_path = visualizer.plot_multi_gpu(gpu_metrics, gpu_ids=gpu_ids, timespan=timespan)
+        chart_path = await run_in_threadpool(visualizer.plot_multi_gpu, gpu_metrics, gpu_ids=gpu_ids, timespan=timespan)
 
         return {
             "success": True,
@@ -519,7 +514,7 @@ async def plot_multiple_processes(req: PlotProcessesRequest):
             return {"success": False, "error": f"在指定時間範圍內沒有找到任何選定PID的數據。"}
 
         # 4. 調用 visualizer 生成圖表
-        chart_path = visualizer.plot_process_comparison(process_data, req.pids, req.timespan)
+        chart_path = await run_in_threadpool(visualizer.plot_process_comparison, process_data, req.pids, req.timespan)
 
         return {
             "success": True,
@@ -581,7 +576,8 @@ async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks
         else:
             filter_name = "All Processes"
             
-        chart_path = visualizer.plot_process_timeline(
+        chart_path = await run_in_threadpool(
+            visualizer.plot_process_timeline,
             process_data, 
             process_name=filter_name, 
             timespan=timespan,

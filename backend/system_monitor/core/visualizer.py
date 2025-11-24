@@ -20,18 +20,20 @@ plt.rcParams['axes.unicode_minus'] = False
 
 class SystemMonitorVisualizer:
     """系統監控可視化器"""
-    
-    def __init__(self):
+
+    def __init__(self, auto_cleanup: bool = True, max_age_days: int = 7):
         self.colors = {
             'cpu': '#FF6B6B', 'ram': '#4ECDC4', 'gpu': '#45B7D1',
             'vram': '#96CEB4', 'temperature': '#FECA57'
         }
         self.output_dir = Path('plots')
         self.output_dir.mkdir(exist_ok=True)
-        self.subdirs = {k: self.output_dir / k for k in 
-                        ['overview', 'comparison', 'memory', 'distribution', 'process_timeline']}
-        for subdir in self.subdirs.values():
-            subdir.mkdir(exist_ok=True)
+
+        self.max_age_days = max_age_days
+
+        # 自動清理舊圖表
+        if auto_cleanup:
+            self.cleanup_old_plots()
 
         # **新增**：定義深色主題樣式
         self._dark_style_params = {
@@ -49,12 +51,72 @@ class SystemMonitorVisualizer:
             'legend.labelcolor': '#f0f0f0'
         }
 
-    def _prepare_data(self, metrics: List[Dict]) -> pd.DataFrame:
+    def cleanup_old_plots(self, max_age_days: Optional[int] = None) -> int:
+        """
+        清理超過指定天數的舊圖表
+
+        Args:
+            max_age_days: 保留天數（None 則使用初始化時的設定）
+
+        Returns:
+            刪除的文件數量
+        """
+        import time
+
+        if max_age_days is None:
+            max_age_days = self.max_age_days
+
+        cutoff_time = time.time() - (max_age_days * 86400)  # 86400 秒 = 1 天
+        deleted_count = 0
+
+        try:
+            # 清理所有 .png 文件
+            for plot_file in self.output_dir.glob('*.png'):
+                if plot_file.is_file() and plot_file.stat().st_mtime < cutoff_time:
+                    plot_file.unlink()
+                    deleted_count += 1
+
+            if deleted_count > 0:
+                print(f"🗑️  清理了 {deleted_count} 個超過 {max_age_days} 天的舊圖表")
+
+        except Exception as e:
+            print(f"❌ 清理圖表時發生錯誤: {e}")
+
+        return deleted_count
+
+    def _prepare_data(self, metrics: List[Dict], max_points: int = 1000) -> pd.DataFrame:
         if not metrics:
             return pd.DataFrame()
         df = pd.DataFrame(metrics)
         df['datetime'] = pd.to_datetime(df['timestamp'])
-        return df.sort_values('datetime').reset_index(drop=True)
+        df = df.sort_values('datetime').reset_index(drop=True)
+        
+        # 如果數據點過多，進行降採樣
+        if len(df) > max_points:
+            # 計算重採樣間隔
+            time_span = df['datetime'].max() - df['datetime'].min()
+            interval = time_span / max_points
+            
+            # 設置 datetime 為索引
+            df.set_index('datetime', inplace=True)
+            
+            # 針對數值列進行重採樣（取平均值）
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            
+            # 對於非數值列（如 source），取第一個值
+            # 這裡我們主要關心數值列的繪圖
+            
+            # 使用重採樣，保留峰值特徵可能更好，但平均值更平滑
+            # 這裡我們使用平均值，因為這通常是趨勢圖的目的
+            # 如果需要保留峰值，可以使用 .max() 或自定義聚合
+            df_resampled = df[numeric_cols].resample(interval).mean()
+            
+            # 恢復 datetime 列
+            df_resampled.reset_index(inplace=True)
+            
+            return df_resampled
+            
+        return df
 
     def _format_xaxis(self, ax, time_span_seconds):
         if time_span_seconds <= 3600: # 1小時內
@@ -77,38 +139,41 @@ class SystemMonitorVisualizer:
         end_time = df['datetime'].max().strftime('%m/%d %H:%M')
         date_range = f"{start_time} - {end_time}"
 
-        # 從 raw_data 中提取功耗資訊
-        if 'raw_data' in df.columns:
-            def extract_power(raw_data):
-                if isinstance(raw_data, dict):
-                    return raw_data.get('power_draw')
-                return None
-            df['power_draw'] = df['raw_data'].apply(extract_power)
-        else:
-            df['power_draw'] = None
-
         with plt.style.context(self._dark_style_params):
-            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            fig, axes = plt.subplots(1, 2, figsize=(16, 5))
             fig.suptitle(f'System Overview - {timespan}\n{date_range}', fontsize=16, fontweight='bold')
 
             time_span_seconds = (df['datetime'].max() - df['datetime'].min()).total_seconds()
 
-            # CPU Usage
+            # 第一張圖：CPU + RAM (雙 Y 軸)
             ax_cpu = axes[0]
-            ax_cpu.set_title('CPU Usage (%)', fontweight='bold')
-            ax_cpu.set_ylabel('Usage (%)')
+            ax_cpu.set_title('CPU & RAM Usage', fontweight='bold')
+            ax_cpu.set_ylabel('CPU Usage (%)', color=self.colors['cpu'])
             ax_cpu.set_ylim(0, 100)
             ax_cpu.grid(True, alpha=0.3)
+            ax_cpu.tick_params(axis='y', labelcolor=self.colors['cpu'])
+
             if 'cpu_usage' in df.columns and df['cpu_usage'].notna().any():
                 valid = df['cpu_usage'].notna()
                 ax_cpu.fill_between(df.loc[valid, 'datetime'], df.loc[valid, 'cpu_usage'], alpha=0.3, color=self.colors['cpu'])
-                ax_cpu.plot(df.loc[valid, 'datetime'], df.loc[valid, 'cpu_usage'], color=self.colors['cpu'], linewidth=1.5)
+                ax_cpu.plot(df.loc[valid, 'datetime'], df.loc[valid, 'cpu_usage'], color=self.colors['cpu'], linewidth=2, label='CPU %')
+
+            # 第二個 Y 軸（RAM）
+            ax_ram = ax_cpu.twinx()
+            ax_ram.set_ylabel('RAM Usage (%)', color=self.colors['ram'])
+            ax_ram.set_ylim(0, 100)
+            ax_ram.tick_params(axis='y', labelcolor=self.colors['ram'])
+
+            if 'ram_usage' in df.columns and df['ram_usage'].notna().any():
+                valid = df['ram_usage'].notna()
+                ax_ram.plot(df.loc[valid, 'datetime'], df.loc[valid, 'ram_usage'], color=self.colors['ram'], linewidth=2, linestyle='--', label='RAM %')
+
             self._format_xaxis(ax_cpu, time_span_seconds)
 
-            # GPU Usage + Temperature (雙 Y 軸)
+            # 第二張圖：GPU + VRAM (雙 Y 軸)
             ax_gpu = axes[1]
-            ax_gpu.set_title('GPU Usage & Temperature', fontweight='bold')
-            ax_gpu.set_ylabel('Usage (%)', color=self.colors['gpu'])
+            ax_gpu.set_title('GPU & VRAM Usage', fontweight='bold')
+            ax_gpu.set_ylabel('GPU Usage (%)', color=self.colors['gpu'])
             ax_gpu.set_ylim(0, 100)
             ax_gpu.grid(True, alpha=0.3)
             ax_gpu.tick_params(axis='y', labelcolor=self.colors['gpu'])
@@ -116,42 +181,26 @@ class SystemMonitorVisualizer:
             if 'gpu_usage' in df.columns and df['gpu_usage'].notna().any():
                 valid = df['gpu_usage'].notna()
                 ax_gpu.fill_between(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_usage'], alpha=0.3, color=self.colors['gpu'])
-                ax_gpu.plot(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_usage'], color=self.colors['gpu'], linewidth=2, label='Usage %')
+                ax_gpu.plot(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_usage'], color=self.colors['gpu'], linewidth=2, label='GPU %')
             else:
                 ax_gpu.text(0.5, 0.5, 'GPU Not Available', ha='center', va='center', transform=ax_gpu.transAxes, fontsize=14, alpha=0.5)
 
-            # 第二個 Y 軸（溫度）
-            ax_temp = ax_gpu.twinx()
-            ax_temp.set_ylabel('Temperature (°C)', color=self.colors['temperature'])
-            ax_temp.tick_params(axis='y', labelcolor=self.colors['temperature'])
+            # 第二個 Y 軸（VRAM）
+            ax_vram = ax_gpu.twinx()
+            ax_vram.set_ylabel('VRAM Usage (%)', color=self.colors['vram'])
+            ax_vram.set_ylim(0, 100)
+            ax_vram.tick_params(axis='y', labelcolor=self.colors['vram'])
 
-            if 'gpu_temperature' in df.columns and df['gpu_temperature'].notna().any():
-                valid = df['gpu_temperature'].notna()
-                ax_temp.plot(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_temperature'], color=self.colors['temperature'], linewidth=2, label='Temp °C', linestyle='--')
-                ax_temp.axhline(y=80, color='orange', linestyle=':', alpha=0.5, linewidth=1)
-                ax_temp.axhline(y=90, color='red', linestyle=':', alpha=0.5, linewidth=1)
+            if 'vram_usage' in df.columns and df['vram_usage'].notna().any():
+                valid = df['vram_usage'].notna()
+                ax_vram.plot(df.loc[valid, 'datetime'], df.loc[valid, 'vram_usage'], color=self.colors['vram'], linewidth=2, linestyle='--', label='VRAM %')
 
             self._format_xaxis(ax_gpu, time_span_seconds)
-
-            # GPU Power Draw
-            ax_power = axes[2]
-            ax_power.set_title('GPU Power (W)', fontweight='bold')
-            ax_power.set_ylabel('Power (W)')
-            ax_power.grid(True, alpha=0.3)
-
-            if 'power_draw' in df.columns and df['power_draw'].notna().any():
-                valid = df['power_draw'].notna()
-                ax_power.fill_between(df.loc[valid, 'datetime'], df.loc[valid, 'power_draw'], alpha=0.3, color='#FF6B6B')
-                ax_power.plot(df.loc[valid, 'datetime'], df.loc[valid, 'power_draw'], color='#FF6B6B', linewidth=1.5)
-                ax_power.set_ylim(0, df.loc[valid, 'power_draw'].max() * 1.1)
-            else:
-                ax_power.text(0.5, 0.5, 'Power Data Not Available', ha='center', va='center', transform=ax_power.transAxes, fontsize=14, alpha=0.5)
-            self._format_xaxis(ax_power, time_span_seconds)
 
             plt.tight_layout(rect=[0, 0, 1, 0.92])
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_path = self.subdirs['overview'] / f'system_overview_{timestamp}.png'
+                output_path = self.output_dir / f'system_overview_{timestamp}.png'
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close()
         return str(output_path)
@@ -187,7 +236,7 @@ class SystemMonitorVisualizer:
             plt.tight_layout()
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_path = self.subdirs['comparison'] / f'resource_comparison_{timestamp}.png'
+                output_path = self.output_dir / f'resource_comparison_{timestamp}.png'
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close()
         return str(output_path)
@@ -275,7 +324,7 @@ class SystemMonitorVisualizer:
             plt.tight_layout(rect=[0, 0, 1, 0.94])
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_path = self.subdirs['memory'] / f'memory_usage_{timestamp}.png'
+                output_path = self.output_dir / f'memory_usage_{timestamp}.png'
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close()
         return str(output_path)
@@ -312,7 +361,7 @@ class SystemMonitorVisualizer:
             plt.tight_layout(rect=[0, 0, 1, 0.94])
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_path = self.subdirs['distribution'] / f'usage_distribution_{timestamp}.png'
+                output_path = self.output_dir / f'usage_distribution_{timestamp}.png'
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close()
         return str(output_path)
@@ -362,7 +411,7 @@ class SystemMonitorVisualizer:
             plt.tight_layout(rect=[0, 0, 0.85, 0.96])
             safe_name = "".join(c for c in process_name if c.isalnum()).rstrip()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filepath = self.subdirs['process_timeline'] / f"process_{safe_name}_{timestamp}.png"
+            filepath = self.output_dir / f"process_{safe_name}_{timestamp}.png"
             plt.savefig(filepath, dpi=150, bbox_inches='tight')
             plt.close()
         return str(filepath)
@@ -568,7 +617,7 @@ class SystemMonitorVisualizer:
 
             plt.tight_layout(rect=[0, 0, 1, 0.96])
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filepath = self.subdirs['process_timeline'] / f"proc_compare_{timestamp}.png"
+            filepath = self.output_dir / f"proc_compare_{timestamp}.png"
             plt.savefig(filepath, dpi=150, bbox_inches='tight')
             plt.close()
 
@@ -639,46 +688,55 @@ class SystemMonitorVisualizer:
         n_gpus = len(gpu_ids)
         gpu_colors = plt.cm.tab10(np.linspace(0, 1, max(n_gpus, 10)))
 
+        # 根據 GPU 數量調整標題
+        if n_gpus == 1:
+            title = f'GPU Monitor (GPU {gpu_ids[0]}) - {timespan}\n{date_range}'
+        else:
+            title = f'Multi-GPU Monitor ({n_gpus} GPUs) - {timespan}\n{date_range}'
+
         with plt.style.context(self._dark_style_params):
             # 計算佈局：上面 1 行總和，下面 2 行個別 GPU（4 列）
             n_rows = 3
             n_cols = 4
             fig = plt.figure(figsize=(20, 16))
-            fig.suptitle(f'Multi-GPU Monitor ({n_gpus} GPUs) - {timespan}\n{date_range}',
-                        fontsize=16, fontweight='bold')
+            fig.suptitle(title, fontsize=16, fontweight='bold')
 
             # ===== 第一行：總和圖表 =====
-            # 平均 GPU 使用率
+            # GPU 使用率（單GPU顯示該GPU，多GPU顯示平均）
             ax_sum_usage = fig.add_subplot(n_rows, n_cols, 1)
             ax_sum_usage.fill_between(summary['datetime'], summary['gpu_usage'], alpha=0.3, color='#45B7D1')
             ax_sum_usage.plot(summary['datetime'], summary['gpu_usage'], color='#45B7D1', linewidth=2)
-            ax_sum_usage.set_title('Avg GPU Usage (%)', fontweight='bold')
+            usage_title = 'GPU Usage (%)' if n_gpus == 1 else 'Avg GPU Usage (%)'
+            ax_sum_usage.set_title(usage_title, fontweight='bold')
             ax_sum_usage.set_ylim(0, 100)
             ax_sum_usage.grid(True, alpha=0.3)
 
-            # 平均溫度
+            # 溫度（單GPU顯示該GPU，多GPU顯示平均）
             ax_sum_temp = fig.add_subplot(n_rows, n_cols, 2)
             ax_sum_temp.fill_between(summary['datetime'], summary['temperature'], alpha=0.3, color='#FECA57')
             ax_sum_temp.plot(summary['datetime'], summary['temperature'], color='#FECA57', linewidth=2)
             ax_sum_temp.axhline(y=80, color='orange', linestyle='--', alpha=0.7)
-            ax_sum_temp.set_title('Avg Temperature (°C)', fontweight='bold')
+            temp_title = 'Temperature (°C)' if n_gpus == 1 else 'Avg Temperature (°C)'
+            ax_sum_temp.set_title(temp_title, fontweight='bold')
             ax_sum_temp.grid(True, alpha=0.3)
 
-            # 總 VRAM 使用率
+            # VRAM 使用率（單GPU或多GPU都顯示總和）
             ax_sum_vram = fig.add_subplot(n_rows, n_cols, 3)
             ax_sum_vram.fill_between(summary['datetime'], summary['total_vram_usage'], alpha=0.3, color='#96CEB4')
             ax_sum_vram.plot(summary['datetime'], summary['total_vram_usage'], color='#96CEB4', linewidth=2)
-            ax_sum_vram.set_title('Total VRAM Usage (%)', fontweight='bold')
+            vram_title = 'VRAM Usage (%)' if n_gpus == 1 else 'Total VRAM Usage (%)'
+            ax_sum_vram.set_title(vram_title, fontweight='bold')
             ax_sum_vram.set_ylim(0, 100)
             ax_sum_vram.grid(True, alpha=0.3)
 
-            # 總功耗
+            # 功耗（單GPU或多GPU都顯示總和）
             ax_sum_power = fig.add_subplot(n_rows, n_cols, 4)
             power_valid = summary['power_draw'].dropna()
             if len(power_valid) > 0:
                 ax_sum_power.fill_between(summary['datetime'], summary['power_draw'].fillna(0), alpha=0.3, color='#FF6B6B')
                 ax_sum_power.plot(summary['datetime'], summary['power_draw'].fillna(0), color='#FF6B6B', linewidth=2)
-            ax_sum_power.set_title('Total Power (W)', fontweight='bold')
+            power_title = 'Power (W)' if n_gpus == 1 else 'Total Power (W)'
+            ax_sum_power.set_title(power_title, fontweight='bold')
             ax_sum_power.grid(True, alpha=0.3)
 
             # ===== 第二、三行：個別 GPU =====
@@ -691,8 +749,9 @@ class SystemMonitorVisualizer:
                 ax = fig.add_subplot(n_rows, n_cols, ax_idx)
 
                 color = gpu_colors[i]
+                vram_color = '#96CEB4'  # VRAM 使用綠色
 
-                # 繪製 GPU 使用率
+                # 繪製 GPU 使用率（左側 Y 軸）
                 if 'gpu_usage' in gpu_data.columns:
                     valid = gpu_data['gpu_usage'].notna()
                     if valid.any():
@@ -701,12 +760,27 @@ class SystemMonitorVisualizer:
                                        alpha=0.3, color=color)
                         ax.plot(gpu_data.loc[valid, 'datetime'],
                                gpu_data.loc[valid, 'gpu_usage'],
-                               color=color, linewidth=1.5)
+                               color=color, linewidth=2, label='GPU Usage')
 
                 ax.set_title(f'GPU {gpu_id}', fontweight='bold', color=color)
                 ax.set_ylim(0, 100)
-                ax.set_ylabel('Usage %')
+                ax.set_ylabel('GPU Usage %', color=color)
+                ax.tick_params(axis='y', labelcolor=color)
                 ax.grid(True, alpha=0.3)
+
+                # 繪製 VRAM 使用率（右側 Y 軸）
+                ax2 = ax.twinx()
+                if 'vram_used_mb' in gpu_data.columns and 'vram_total_mb' in gpu_data.columns:
+                    vram_usage = (gpu_data['vram_used_mb'] / gpu_data['vram_total_mb'] * 100).fillna(0)
+                    valid = vram_usage.notna()
+                    if valid.any():
+                        ax2.plot(gpu_data.loc[valid, 'datetime'],
+                                vram_usage.loc[valid],
+                                color=vram_color, linewidth=2, linestyle='--', label='VRAM Usage')
+
+                ax2.set_ylim(0, 100)
+                ax2.set_ylabel('VRAM %', color=vram_color)
+                ax2.tick_params(axis='y', labelcolor=vram_color)
 
             # 格式化所有 X 軸
             time_span_seconds = (df['datetime'].max() - df['datetime'].min()).total_seconds()
