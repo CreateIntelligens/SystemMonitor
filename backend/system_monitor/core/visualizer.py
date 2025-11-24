@@ -71,45 +71,84 @@ class SystemMonitorVisualizer:
     def plot_system_overview(self, metrics: List[Dict], output_path: Optional[str] = None, timespan: str = "24h") -> str:
         df = self._prepare_data(metrics)
         if df.empty: raise ValueError("No data to plot")
-        
+
         # 獲取實際的時間範圍
         start_time = df['datetime'].min().strftime('%m/%d %H:%M')
         end_time = df['datetime'].max().strftime('%m/%d %H:%M')
         date_range = f"{start_time} - {end_time}"
-        
+
+        # 從 raw_data 中提取功耗資訊
+        if 'raw_data' in df.columns:
+            def extract_power(raw_data):
+                if isinstance(raw_data, dict):
+                    return raw_data.get('power_draw')
+                return None
+            df['power_draw'] = df['raw_data'].apply(extract_power)
+        else:
+            df['power_draw'] = None
+
         with plt.style.context(self._dark_style_params):
-            fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-            fig.suptitle(f'System Monitor Overview - {timespan}\n{date_range}', fontsize=16, fontweight='bold')
-            
-            axes_map = {
-                'CPU Usage (%)': (df['cpu_usage'], self.colors['cpu']),
-                'RAM Usage (%)': (df['ram_usage'], self.colors['ram']),
-                'GPU Usage (%)': (df.get('gpu_usage'), self.colors['gpu']),
-                'VRAM Usage (%)': (df.get('vram_usage'), self.colors['vram'])
-            }
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            fig.suptitle(f'System Overview - {timespan}\n{date_range}', fontsize=16, fontweight='bold')
 
-            for ax, (title, (data, color)) in zip(axes.flat, axes_map.items()):
-                ax.set_title(title, fontweight='bold')
-                ax.set_ylabel('Usage (%)')
-                ax.grid(True, alpha=0.3)
-                ax.set_ylim(0, 100)
-                if data is not None and data.notna().any():
-                    # 只繪製有數據的點，不連接缺失值
-                    valid_mask = data.notna()
-                    valid_times = df['datetime'][valid_mask]
-                    valid_data = data[valid_mask]
-                    
-                    # 繪製散點圖（主要）
-                    ax.scatter(valid_times, valid_data, color=color, s=20, alpha=0.8, zorder=3)
-                    
-                    # 只在連續數據點之間添加淡線連接（可選）
-                    if len(valid_data) > 1:
-                        ax.plot(valid_times, valid_data, color=color, linewidth=1, alpha=0.4, zorder=2)
-                else:
-                    ax.text(0.5, 0.5, 'Not Available', ha='center', va='center', transform=ax.transAxes, fontsize=14, alpha=0.5)
-                self._format_xaxis(ax, (df['datetime'].max() - df['datetime'].min()).total_seconds())
+            time_span_seconds = (df['datetime'].max() - df['datetime'].min()).total_seconds()
 
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            # CPU Usage
+            ax_cpu = axes[0]
+            ax_cpu.set_title('CPU Usage (%)', fontweight='bold')
+            ax_cpu.set_ylabel('Usage (%)')
+            ax_cpu.set_ylim(0, 100)
+            ax_cpu.grid(True, alpha=0.3)
+            if 'cpu_usage' in df.columns and df['cpu_usage'].notna().any():
+                valid = df['cpu_usage'].notna()
+                ax_cpu.fill_between(df.loc[valid, 'datetime'], df.loc[valid, 'cpu_usage'], alpha=0.3, color=self.colors['cpu'])
+                ax_cpu.plot(df.loc[valid, 'datetime'], df.loc[valid, 'cpu_usage'], color=self.colors['cpu'], linewidth=1.5)
+            self._format_xaxis(ax_cpu, time_span_seconds)
+
+            # GPU Usage + Temperature (雙 Y 軸)
+            ax_gpu = axes[1]
+            ax_gpu.set_title('GPU Usage & Temperature', fontweight='bold')
+            ax_gpu.set_ylabel('Usage (%)', color=self.colors['gpu'])
+            ax_gpu.set_ylim(0, 100)
+            ax_gpu.grid(True, alpha=0.3)
+            ax_gpu.tick_params(axis='y', labelcolor=self.colors['gpu'])
+
+            if 'gpu_usage' in df.columns and df['gpu_usage'].notna().any():
+                valid = df['gpu_usage'].notna()
+                ax_gpu.fill_between(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_usage'], alpha=0.3, color=self.colors['gpu'])
+                ax_gpu.plot(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_usage'], color=self.colors['gpu'], linewidth=2, label='Usage %')
+            else:
+                ax_gpu.text(0.5, 0.5, 'GPU Not Available', ha='center', va='center', transform=ax_gpu.transAxes, fontsize=14, alpha=0.5)
+
+            # 第二個 Y 軸（溫度）
+            ax_temp = ax_gpu.twinx()
+            ax_temp.set_ylabel('Temperature (°C)', color=self.colors['temperature'])
+            ax_temp.tick_params(axis='y', labelcolor=self.colors['temperature'])
+
+            if 'gpu_temperature' in df.columns and df['gpu_temperature'].notna().any():
+                valid = df['gpu_temperature'].notna()
+                ax_temp.plot(df.loc[valid, 'datetime'], df.loc[valid, 'gpu_temperature'], color=self.colors['temperature'], linewidth=2, label='Temp °C', linestyle='--')
+                ax_temp.axhline(y=80, color='orange', linestyle=':', alpha=0.5, linewidth=1)
+                ax_temp.axhline(y=90, color='red', linestyle=':', alpha=0.5, linewidth=1)
+
+            self._format_xaxis(ax_gpu, time_span_seconds)
+
+            # GPU Power Draw
+            ax_power = axes[2]
+            ax_power.set_title('GPU Power (W)', fontweight='bold')
+            ax_power.set_ylabel('Power (W)')
+            ax_power.grid(True, alpha=0.3)
+
+            if 'power_draw' in df.columns and df['power_draw'].notna().any():
+                valid = df['power_draw'].notna()
+                ax_power.fill_between(df.loc[valid, 'datetime'], df.loc[valid, 'power_draw'], alpha=0.3, color='#FF6B6B')
+                ax_power.plot(df.loc[valid, 'datetime'], df.loc[valid, 'power_draw'], color='#FF6B6B', linewidth=1.5)
+                ax_power.set_ylim(0, df.loc[valid, 'power_draw'].max() * 1.1)
+            else:
+                ax_power.text(0.5, 0.5, 'Power Data Not Available', ha='center', va='center', transform=ax_power.transAxes, fontsize=14, alpha=0.5)
+            self._format_xaxis(ax_power, time_span_seconds)
+
+            plt.tight_layout(rect=[0, 0, 1, 0.92])
             if output_path is None:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 output_path = self.subdirs['overview'] / f'system_overview_{timestamp}.png'
@@ -131,18 +170,13 @@ class SystemMonitorVisualizer:
             for key in ['cpu', 'ram', 'gpu', 'vram']:
                 col_name = f'{key}_usage'
                 if col_name in df.columns and df[col_name].notna().any():
-                    # 只繪製有數據的點，不連接缺失值
                     valid_mask = df[col_name].notna()
                     valid_times = df['datetime'][valid_mask]
                     valid_data = df[col_name][valid_mask]
-                    
-                    # 繪製散點圖（主要）
-                    ax.scatter(valid_times, valid_data, color=self.colors[key], s=15, alpha=0.8, zorder=3, label=key.upper())
-                    
-                    # 只在連續數據點之間添加淡線連接（可選）
-                    if len(valid_data) > 1:
-                        ax.plot(valid_times, valid_data, color=self.colors[key], linewidth=1, alpha=0.4, zorder=2)
-            
+
+                    # 使用線條 + 淡填充
+                    ax.plot(valid_times, valid_data, color=self.colors[key], linewidth=1.5, label=key.upper(), alpha=0.9)
+
             ax.set_title(f'System Resource Usage Comparison\n{date_range}', fontsize=16, fontweight='bold')
             ax.set_ylabel('Usage (%)', fontsize=12)
             ax.set_xlabel('Time', fontsize=12)
@@ -173,47 +207,35 @@ class SystemMonitorVisualizer:
             
             # RAM 圖表
             if 'ram_used_gb' in df.columns and 'ram_total_gb' in df.columns:
-                # 只繪製有數據的點，不連接缺失值
                 valid_mask = df['ram_used_gb'].notna()
                 valid_times = df['datetime'][valid_mask]
                 valid_data = df['ram_used_gb'][valid_mask]
-                
+
                 if len(valid_data) > 0:
-                    # 繪製散點圖（主要）
-                    ax1.scatter(valid_times, valid_data, color=self.colors['ram'], s=15, alpha=0.8, zorder=3, label='Used')
-                    
-                    # 只在連續數據點之間添加淡線連接和填充（可選）
-                    if len(valid_data) > 1:
-                        ax1.plot(valid_times, valid_data, color=self.colors['ram'], linewidth=1, alpha=0.4, zorder=2)
-                        ax1.fill_between(valid_times, valid_data, alpha=0.2, color=self.colors['ram'])
-                
+                    ax1.fill_between(valid_times, valid_data, alpha=0.3, color=self.colors['ram'])
+                    ax1.plot(valid_times, valid_data, color=self.colors['ram'], linewidth=1.5, label='Used')
+
                 # 添加記憶體上限線
                 total_ram = df['ram_total_gb'].iloc[0] if 'ram_total_gb' in df.columns else 16.0
-                ax1.axhline(y=total_ram, color='red', linestyle='--', alpha=0.7, 
+                ax1.axhline(y=total_ram, color='red', linestyle='--', alpha=0.7,
                            label=f'Total Memory ({total_ram:.1f}GB)')
-                ax1.set_ylim(0, total_ram * 1.1)  # 給上限留點空間
+                ax1.set_ylim(0, total_ram * 1.1)
                 
             ax1.set_title('RAM Usage (GB)', fontweight='bold')
             ax1.set_ylabel('Memory (GB)')
             ax1.legend()
             ax1.grid(True, alpha=0.3)
 
-            # VRAM 圖表  
+            # VRAM 圖表
             if 'vram_used_mb' in df.columns and df['vram_used_mb'].notna().any():
-                # 只繪製有數據的點，不連接缺失值
                 valid_mask = df['vram_used_mb'].notna()
                 valid_times = df['datetime'][valid_mask]
                 valid_data_mb = df['vram_used_mb'][valid_mask]
                 valid_data_gb = valid_data_mb / 1024
-                
+
                 if len(valid_data_gb) > 0:
-                    # 繪製散點圖（主要）
-                    ax2.scatter(valid_times, valid_data_gb, color=self.colors['vram'], s=15, alpha=0.8, zorder=3, label='Used')
-                    
-                    # 只在連續數據點之間添加淡線連接和填充（可選）
-                    if len(valid_data_gb) > 1:
-                        ax2.plot(valid_times, valid_data_gb, color=self.colors['vram'], linewidth=1, alpha=0.4, zorder=2)
-                        ax2.fill_between(valid_times, valid_data_gb, alpha=0.2, color=self.colors['vram'])
+                    ax2.fill_between(valid_times, valid_data_gb, alpha=0.3, color=self.colors['vram'])
+                    ax2.plot(valid_times, valid_data_gb, color=self.colors['vram'], linewidth=1.5, label='Used')
                 
                 # 添加VRAM上限線
                 vram_total_for_chart = None
@@ -551,3 +573,150 @@ class SystemMonitorVisualizer:
             plt.close()
 
         return str(filepath)
+
+    def plot_multi_gpu(self, gpu_metrics: List[Dict], gpu_ids: List[int] = None, timespan: str = "1h") -> str:
+        """
+        繪製多 GPU 圖表（總和 + 個別）
+
+        Args:
+            gpu_metrics: GPU 指標數據列表
+            gpu_ids: 要顯示的 GPU ID 列表（None 表示全部）
+            timespan: 時間範圍
+
+        Returns:
+            圖片檔案路徑
+        """
+        if not gpu_metrics:
+            raise ValueError("沒有 GPU 數據可繪製")
+
+        df = pd.DataFrame(gpu_metrics)
+        df['datetime'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('datetime')
+
+        # 獲取所有可用的 GPU ID
+        available_gpus = sorted(df['gpu_id'].unique())
+
+        # 如果未指定，使用所有 GPU
+        if gpu_ids is None:
+            gpu_ids = available_gpus
+        else:
+            gpu_ids = [g for g in gpu_ids if g in available_gpus]
+
+        if not gpu_ids:
+            raise ValueError("沒有有效的 GPU ID")
+
+        # 獲取時間範圍
+        start_time = df['datetime'].min().strftime('%m/%d %H:%M')
+        end_time = df['datetime'].max().strftime('%m/%d %H:%M')
+        date_range = f"{start_time} - {end_time}"
+
+        # 計算總和/平均數據
+        # 按時間分組計算
+        df_filtered = df[df['gpu_id'].isin(gpu_ids)]
+
+        # 解析 raw_data 中的 power_draw
+        def get_power(row):
+            raw = row.get('raw_data')
+            if isinstance(raw, dict):
+                return raw.get('power_draw')
+            return None
+        df_filtered = df_filtered.copy()
+        df_filtered['power_draw'] = df_filtered.apply(get_power, axis=1)
+
+        # 按時間戳分組計算總和/平均
+        summary = df_filtered.groupby('datetime').agg({
+            'gpu_usage': 'mean',      # 平均使用率
+            'temperature': 'mean',     # 平均溫度
+            'vram_used_mb': 'sum',     # 總 VRAM 使用量
+            'vram_total_mb': 'first',  # VRAM 總量（取第一個）
+            'power_draw': 'sum'        # 總功耗
+        }).reset_index()
+
+        # 計算總 VRAM 使用率
+        total_vram_mb = df_filtered.groupby('datetime')['vram_total_mb'].sum().reset_index()
+        summary['total_vram_usage'] = (summary['vram_used_mb'] / total_vram_mb['vram_total_mb'] * 100).fillna(0)
+
+        n_gpus = len(gpu_ids)
+        gpu_colors = plt.cm.tab10(np.linspace(0, 1, max(n_gpus, 10)))
+
+        with plt.style.context(self._dark_style_params):
+            # 計算佈局：上面 1 行總和，下面 2 行個別 GPU（4 列）
+            n_rows = 3
+            n_cols = 4
+            fig = plt.figure(figsize=(20, 16))
+            fig.suptitle(f'Multi-GPU Monitor ({n_gpus} GPUs) - {timespan}\n{date_range}',
+                        fontsize=16, fontweight='bold')
+
+            # ===== 第一行：總和圖表 =====
+            # 平均 GPU 使用率
+            ax_sum_usage = fig.add_subplot(n_rows, n_cols, 1)
+            ax_sum_usage.fill_between(summary['datetime'], summary['gpu_usage'], alpha=0.3, color='#45B7D1')
+            ax_sum_usage.plot(summary['datetime'], summary['gpu_usage'], color='#45B7D1', linewidth=2)
+            ax_sum_usage.set_title('Avg GPU Usage (%)', fontweight='bold')
+            ax_sum_usage.set_ylim(0, 100)
+            ax_sum_usage.grid(True, alpha=0.3)
+
+            # 平均溫度
+            ax_sum_temp = fig.add_subplot(n_rows, n_cols, 2)
+            ax_sum_temp.fill_between(summary['datetime'], summary['temperature'], alpha=0.3, color='#FECA57')
+            ax_sum_temp.plot(summary['datetime'], summary['temperature'], color='#FECA57', linewidth=2)
+            ax_sum_temp.axhline(y=80, color='orange', linestyle='--', alpha=0.7)
+            ax_sum_temp.set_title('Avg Temperature (°C)', fontweight='bold')
+            ax_sum_temp.grid(True, alpha=0.3)
+
+            # 總 VRAM 使用率
+            ax_sum_vram = fig.add_subplot(n_rows, n_cols, 3)
+            ax_sum_vram.fill_between(summary['datetime'], summary['total_vram_usage'], alpha=0.3, color='#96CEB4')
+            ax_sum_vram.plot(summary['datetime'], summary['total_vram_usage'], color='#96CEB4', linewidth=2)
+            ax_sum_vram.set_title('Total VRAM Usage (%)', fontweight='bold')
+            ax_sum_vram.set_ylim(0, 100)
+            ax_sum_vram.grid(True, alpha=0.3)
+
+            # 總功耗
+            ax_sum_power = fig.add_subplot(n_rows, n_cols, 4)
+            power_valid = summary['power_draw'].dropna()
+            if len(power_valid) > 0:
+                ax_sum_power.fill_between(summary['datetime'], summary['power_draw'].fillna(0), alpha=0.3, color='#FF6B6B')
+                ax_sum_power.plot(summary['datetime'], summary['power_draw'].fillna(0), color='#FF6B6B', linewidth=2)
+            ax_sum_power.set_title('Total Power (W)', fontweight='bold')
+            ax_sum_power.grid(True, alpha=0.3)
+
+            # ===== 第二、三行：個別 GPU =====
+            for i, gpu_id in enumerate(gpu_ids[:8]):  # 最多顯示 8 張
+                gpu_data = df_filtered[df_filtered['gpu_id'] == gpu_id]
+                if gpu_data.empty:
+                    continue
+
+                ax_idx = n_cols + i + 1  # 從第 5 個子圖開始
+                ax = fig.add_subplot(n_rows, n_cols, ax_idx)
+
+                color = gpu_colors[i]
+
+                # 繪製 GPU 使用率
+                if 'gpu_usage' in gpu_data.columns:
+                    valid = gpu_data['gpu_usage'].notna()
+                    if valid.any():
+                        ax.fill_between(gpu_data.loc[valid, 'datetime'],
+                                       gpu_data.loc[valid, 'gpu_usage'],
+                                       alpha=0.3, color=color)
+                        ax.plot(gpu_data.loc[valid, 'datetime'],
+                               gpu_data.loc[valid, 'gpu_usage'],
+                               color=color, linewidth=1.5)
+
+                ax.set_title(f'GPU {gpu_id}', fontweight='bold', color=color)
+                ax.set_ylim(0, 100)
+                ax.set_ylabel('Usage %')
+                ax.grid(True, alpha=0.3)
+
+            # 格式化所有 X 軸
+            time_span_seconds = (df['datetime'].max() - df['datetime'].min()).total_seconds()
+            for ax in fig.get_axes():
+                self._format_xaxis(ax, time_span_seconds)
+
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_path = self.output_dir / f'multi_gpu_{timestamp}.png'
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close()
+
+        return str(output_path)

@@ -7,10 +7,41 @@
 import sqlite3
 import json
 import os
+import socket
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import threading
+
+
+def get_source_identifier() -> str:
+    """取得本機來源識別碼（優先使用外網 IP）"""
+    try:
+        import urllib.request
+
+        # 優先取得外網 IP
+        try:
+            with urllib.request.urlopen("https://ifconfig.me/ip", timeout=3) as resp:
+                external_ip = resp.read().decode('utf-8').strip()
+                if external_ip:
+                    return external_ip
+        except Exception:
+            pass
+
+        # 備用：從掛載的 host hostname 讀取
+        host_hostname_path = "/host/etc/hostname"
+        if os.path.exists(host_hostname_path):
+            with open(host_hostname_path, 'r') as f:
+                return f.read().strip()
+
+        # 最後用內網 IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "unknown"
 
 
 class MonitoringDatabase:
@@ -52,7 +83,8 @@ class MonitoringDatabase:
                     vram_used_mb REAL,
                     vram_total_mb REAL,
                     gpu_temperature REAL,
-                    raw_data TEXT
+                    raw_data TEXT,
+                    source TEXT DEFAULT 'unknown'
                 )
             """)
             
@@ -70,7 +102,26 @@ class MonitoringDatabase:
                     cpu_percent REAL,
                     ram_mb REAL,
                     start_time TEXT,
-                    raw_data TEXT
+                    raw_data TEXT,
+                    source TEXT DEFAULT 'unknown'
+                )
+            """)
+
+            # 創建多GPU指標表（支援記錄所有GPU的歷史數據）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS gpu_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    unix_timestamp REAL NOT NULL,
+                    gpu_id INTEGER NOT NULL,
+                    gpu_name TEXT,
+                    gpu_usage REAL,
+                    vram_usage REAL,
+                    vram_used_mb REAL,
+                    vram_total_mb REAL,
+                    temperature REAL,
+                    raw_data TEXT,
+                    source TEXT DEFAULT 'unknown'
                 )
             """)
             
@@ -91,8 +142,19 @@ class MonitoringDatabase:
             """)
             
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_gpu_proc_pid 
+                CREATE INDEX IF NOT EXISTS idx_gpu_proc_pid
                 ON gpu_processes(pid, unix_timestamp)
+            """)
+
+            # 創建 GPU 指標索引
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_gpu_metrics_timestamp
+                ON gpu_metrics(unix_timestamp)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_gpu_metrics_gpu_id
+                ON gpu_metrics(gpu_id, unix_timestamp)
             """)
             
             # 創建配置表
@@ -103,7 +165,15 @@ class MonitoringDatabase:
                     updated_at TEXT
                 )
             """)
-            
+
+            # 向後兼容：為現有表添加 source 欄位（如果不存在）
+            for table in ['system_metrics', 'gpu_processes', 'gpu_metrics']:
+                try:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN source TEXT DEFAULT 'unknown'")
+                except sqlite3.OperationalError:
+                    # 欄位已存在，忽略錯誤
+                    pass
+
             conn.commit()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -127,12 +197,13 @@ class MonitoringDatabase:
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
                     
+                    source = data.get('source') or get_source_identifier()
                     cursor.execute("""
                         INSERT INTO system_metrics (
-                            timestamp, unix_timestamp, cpu_usage, ram_usage, 
+                            timestamp, unix_timestamp, cpu_usage, ram_usage,
                             ram_used_gb, ram_total_gb, gpu_usage, vram_usage,
-                            vram_used_mb, vram_total_mb, gpu_temperature, raw_data
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            vram_used_mb, vram_total_mb, gpu_temperature, raw_data, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         data.get('timestamp'),
                         data.get('unix_timestamp'),
@@ -145,7 +216,8 @@ class MonitoringDatabase:
                         data.get('vram_used_mb'),
                         data.get('vram_total_mb'),
                         data.get('gpu_temperature'),
-                        json.dumps(data)  # 保存完整原始數據
+                        json.dumps(data),  # 保存完整原始數據
+                        source
                     ))
                     
                     conn.commit()
@@ -227,6 +299,58 @@ class MonitoringDatabase:
         """獲取最新的監控數據"""
         return self.get_metrics(limit=count)
     
+    def insert_gpu_metrics(self, gpu_list: List[Dict], timestamp: Optional[datetime] = None) -> bool:
+        """
+        插入多GPU指標數據
+
+        Args:
+            gpu_list: GPU資訊列表
+            timestamp: 時間戳（可選，預設使用當前時間）
+
+        Returns:
+            是否插入成功
+        """
+        if not gpu_list:
+            return True
+
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        try:
+            source = get_source_identifier()
+            with self._lock:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+
+                    # 批量插入GPU數據
+                    for gpu in gpu_list:
+                        cursor.execute("""
+                            INSERT INTO gpu_metrics (
+                                timestamp, unix_timestamp, gpu_id, gpu_name,
+                                gpu_usage, vram_usage, vram_used_mb, vram_total_mb,
+                                temperature, raw_data, source
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            timestamp.isoformat(),
+                            timestamp.timestamp(),
+                            gpu.get('gpu_id', 0),
+                            gpu.get('gpu_name'),
+                            gpu.get('gpu_usage'),
+                            gpu.get('vram_usage'),
+                            gpu.get('vram_used_mb'),
+                            gpu.get('vram_total_mb'),
+                            gpu.get('temperature'),
+                            json.dumps(gpu),
+                            source
+                        ))
+
+                    conn.commit()
+                    return True
+
+        except Exception as e:
+            print(f"❌ 插入 GPU 指標數據失敗: {e}")
+            return False
+
     def insert_gpu_processes(self, processes: List[Dict], timestamp: Optional[datetime] = None) -> bool:
         """
         插入 GPU 進程數據
@@ -245,17 +369,18 @@ class MonitoringDatabase:
             timestamp = datetime.now()
             
         try:
+            source = get_source_identifier()
             with self._lock:
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
-                    
+
                     # 批量插入進程數據
                     for process in processes:
                         cursor.execute("""
                             INSERT INTO gpu_processes (
                                 timestamp, unix_timestamp, pid, process_name, command,
-                                gpu_uuid, gpu_memory_mb, cpu_percent, ram_mb, start_time, raw_data
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                gpu_uuid, gpu_memory_mb, cpu_percent, ram_mb, start_time, raw_data, source
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             timestamp.isoformat(),
                             timestamp.timestamp(),
@@ -267,12 +392,13 @@ class MonitoringDatabase:
                             process.get('cpu_percent'),
                             process.get('ram_mb'),
                             process.get('start_time'),
-                            json.dumps(process)
+                            json.dumps(process),
+                            source
                         ))
-                    
+
                     conn.commit()
                     return True
-                    
+
         except Exception as e:
             print(f"❌ 插入 GPU 進程數據失敗: {e}")
             return False
@@ -490,7 +616,7 @@ class MonitoringDatabase:
                 cursor = conn.cursor()
                 
                 query = """
-                    SELECT 
+                    SELECT
                         pid,
                         process_name,
                         command,
@@ -499,8 +625,12 @@ class MonitoringDatabase:
                         COUNT(*) as record_count,
                         AVG(gpu_memory_mb) as avg_gpu_memory,
                         AVG(cpu_percent) as avg_cpu_percent,
-                        AVG(ram_mb) as avg_ram_mb
-                    FROM gpu_processes 
+                        AVG(ram_mb) as avg_ram_mb,
+                        (SELECT start_time FROM gpu_processes gp2
+                         WHERE gp2.pid = gpu_processes.pid
+                         AND gp2.process_name = gpu_processes.process_name
+                         ORDER BY unix_timestamp ASC LIMIT 1) as start_time
+                    FROM gpu_processes
                     WHERE unix_timestamp >= ? AND unix_timestamp <= ?
                     GROUP BY pid, process_name, command
                     ORDER BY last_seen DESC
@@ -511,15 +641,31 @@ class MonitoringDatabase:
                 
                 results = []
                 for row in rows:
+                    # 處理 start_time，如果格式不完整就補上年份
+                    start_time_str = row['start_time'] or ''
+                    if start_time_str and not start_time_str.startswith('20'):  # 沒有年份
+                        # 格式可能是 "11-24 11:35:30"，補上年份
+                        try:
+                            # 從 first_seen 獲取年份
+                            first_seen_dt = datetime.fromtimestamp(row['first_seen'])
+                            start_time_str = f"{first_seen_dt.year}-{start_time_str}"
+                        except:
+                            start_time_str = start_time_str
+
                     process_info = {
                         'pid': row['pid'],
+                        'name': row['process_name'] or 'Unknown',  # 改為 'name' 以符合前端期望
                         'process_name': row['process_name'] or 'Unknown',
                         'command': row['command'] or '',
+                        'start_time': start_time_str,  # 加入 start_time
                         'last_seen': datetime.fromtimestamp(row['last_seen']).strftime('%Y-%m-%d %H:%M:%S'),
                         'first_seen': datetime.fromtimestamp(row['first_seen']).strftime('%Y-%m-%d %H:%M:%S'),
                         'record_count': row['record_count'],
+                        'gpu_memory_mb': round(row['avg_gpu_memory'] or 0, 1),  # 改為 gpu_memory_mb
                         'avg_gpu_memory_mb': round(row['avg_gpu_memory'] or 0, 1),
+                        'cpu_percent': round(row['avg_cpu_percent'] or 0, 1),  # 改為 cpu_percent
                         'avg_cpu_percent': round(row['avg_cpu_percent'] or 0, 1),
+                        'ram_mb': round(row['avg_ram_mb'] or 0, 1),  # 改為 ram_mb
                         'avg_ram_mb': round(row['avg_ram_mb'] or 0, 1),
                         'status': 'running' if datetime.fromtimestamp(row['last_seen']) > datetime.now() - timedelta(minutes=2) else 'stopped'
                     }
@@ -761,15 +907,91 @@ class MonitoringDatabase:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
                 result = cursor.fetchone()
-                
+
                 return result[0] if result else default
-                
+
         except Exception as e:
             print(f"❌ 獲取配置失敗: {e}")
             return default
+
+    def get_gpu_metrics_by_timespan(self, timespan: str, gpu_id: Optional[int] = None) -> List[Dict]:
+        """
+        根據時間範圍獲取GPU指標數據
+
+        Args:
+            timespan: 時間範圍 (支援: '90m', '24h', '3000s', '7d' 等格式)
+            gpu_id: 特定GPU ID（可選，None表示所有GPU）
+
+        Returns:
+            GPU指標數據列表
+        """
+        import re
+
+        now = datetime.now()
+
+        # 解析時間範圍
+        if timespan.endswith('s'):
+            seconds = int(timespan[:-1])
+            start_time = now - timedelta(seconds=seconds)
+        elif timespan.endswith('m'):
+            minutes = int(timespan[:-1])
+            start_time = now - timedelta(minutes=minutes)
+        elif timespan.endswith('h'):
+            hours = int(timespan[:-1])
+            start_time = now - timedelta(hours=hours)
+        elif timespan.endswith('d'):
+            days = int(timespan[:-1])
+            start_time = now - timedelta(days=days)
+        elif timespan.endswith('w'):
+            weeks = int(timespan[:-1])
+            start_time = now - timedelta(weeks=weeks)
+        else:
+            start_time = now - timedelta(hours=24)
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 構建查詢條件
+                conditions = ["unix_timestamp >= ?"]
+                params = [start_time.timestamp()]
+
+                if gpu_id is not None:
+                    conditions.append("gpu_id = ?")
+                    params.append(gpu_id)
+
+                where_clause = "WHERE " + " AND ".join(conditions)
+                order_clause = "ORDER BY unix_timestamp ASC"
+
+                query = f"""
+                    SELECT * FROM gpu_metrics
+                    {where_clause}
+                    {order_clause}
+                """
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+
+                # 轉換為字典列表
+                metrics = []
+                for row in rows:
+                    metric = dict(row)
+                    # 解析原始數據
+                    if metric.get('raw_data'):
+                        try:
+                            metric['raw_data'] = json.loads(metric['raw_data'])
+                        except json.JSONDecodeError:
+                            pass
+                    metrics.append(metric)
+
+                return metrics
+
+        except Exception as e:
+            print(f"❌ 查詢 GPU 指標數據失敗: {e}")
+            return []
 
 
 def main():

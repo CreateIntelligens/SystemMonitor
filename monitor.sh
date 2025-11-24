@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 配置變數
-CONTAINER_NAME="system_monitor"
+CONTAINER_NAME="system_monitor_backend"
 DAEMON_CONTAINER_NAME="system_monitor_daemon"
 WEB_PORT=5000
 
@@ -99,7 +99,7 @@ start_web() {
     echo -e "${BLUE}🌐 啟動 Web 服務...${NC}"
     
     # 優先本機執行
-    if command -v python &> /dev/null && [[ -f "app.py" ]]; then
+    if command -v python &> /dev/null && [[ -f "backend/api.py" ]]; then
         echo -e "${GREEN}✅ 使用本機 Python 環境${NC}"
         
         # 檢查端口是否被占用
@@ -109,10 +109,10 @@ start_web() {
         fi
         
         echo -e "${BLUE}🚀 啟動 Web 介面...${NC}"
-        python app.py web --host 0.0.0.0 --port ${WEB_PORT}
+        python backend/api.py --host 0.0.0.0 --port ${WEB_PORT}
     else
         echo -e "${YELLOW}🐳 使用 Docker 環境${NC}"
-        docker-compose up -d monitor
+        docker-compose up -d backend
         echo -e "${GREEN}✅ Web 服務已啟動${NC}"
         echo -e "${YELLOW}📍 訪問地址: http://localhost:${WEB_PORT}${NC}"
     fi
@@ -126,7 +126,7 @@ start_monitor() {
         # 在容器內：直接本機執行
         echo -e "${YELLOW}🐳 檢測到容器環境，使用本機執行${NC}"
         start_monitor_local
-    elif command -v python &> /dev/null && [[ -f "app.py" ]] && python -c "import psutil, fastapi" 2>/dev/null; then
+    elif command -v python &> /dev/null && [[ -f "backend/api.py" ]] && python -c "import psutil, fastapi" 2>/dev/null; then
         # 本機環境完整：優先本機執行
         echo -e "${GREEN}✅ 本機環境完整，使用本機執行${NC}"
         start_monitor_local
@@ -143,7 +143,7 @@ start_monitor() {
 
 start_monitor_local() {
     # 檢查是否已經在運行
-    if command -v pgrep &> /dev/null && pgrep -f "python src/system_monitor.py monitor" > /dev/null 2>&1; then
+    if command -v pgrep &> /dev/null && pgrep -f "python backend/cli.py monitor" > /dev/null 2>&1; then
         echo -e "${YELLOW}⚠️  監控服務已在運行${NC}"
         return
     elif [[ -f ".monitor_pid" ]]; then
@@ -160,7 +160,7 @@ start_monitor_local() {
     mkdir -p logs
     
     # 在背景啟動監控（1秒間隔）
-    nohup python src/system_monitor.py monitor --interval 1 > logs/monitor_daemon.log 2>&1 &
+    nohup python backend/cli.py monitor --interval 1 > logs/monitor_daemon.log 2>&1 &
     monitor_pid=$!
     echo $monitor_pid > .monitor_pid
     
@@ -182,7 +182,7 @@ start_monitor_with_choice() {
     local can_run_local=false
     local can_run_docker=false
     
-    if command -v python &> /dev/null && [[ -f "app.py" ]]; then
+    if command -v python &> /dev/null && [[ -f "backend/api.py" ]]; then
         can_run_local=true
     fi
     
@@ -238,28 +238,28 @@ start_monitor_with_choice() {
 
 start_monitor_docker() {
     # 檢查容器是否已在運行
-    if docker ps --format "table {{.Names}}" | grep -q "^system_monitor_only$"; then
+    if docker ps --format "table {{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
         echo -e "${YELLOW}⚠️  Docker 監控服務已在運行${NC}"
         return
     fi
     
-    docker-compose --profile monitoring-only up -d monitor-only
+    docker-compose up -d backend
     echo -e "${GREEN}✅ Docker 監控服務已啟動${NC}"
 }
 
 start_monitor_docker_auto() {
     # 檢查主容器是否已在運行（Web + 監控）
-    if docker ps --format "table {{.Names}}" | grep -q "^system_monitor$"; then
+    if docker ps --format "table {{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
         echo -e "${GREEN}✅ Docker 主服務已運行（包含監控）${NC}"
         echo -e "${YELLOW}📍 訪問地址: http://localhost:${WEB_PORT}${NC}"
         return
     fi
     
     # 啟動主服務（自動包含監控）
-    docker-compose up -d monitor
+    docker-compose up -d backend
     sleep 3
     
-    if docker ps --format "table {{.Names}}" | grep -q "^system_monitor$"; then
+    if docker ps --format "table {{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
         echo -e "${GREEN}✅ Docker 主服務已啟動（Web + 監控）${NC}"
         echo -e "${YELLOW}📍 Web 介面: http://localhost:${WEB_PORT}${NC}"
         echo -e "${YELLOW}📊 自動監控: 已啟動（1秒間隔）${NC}"
@@ -275,7 +275,6 @@ stop_services() {
     stop_monitor_local
     
     # 停止 Docker 服務
-    docker-compose --profile monitoring-only down 2>/dev/null || true
     docker-compose down
     
     echo -e "${GREEN}✅ 所有服務已停止${NC}"
@@ -290,13 +289,8 @@ stop_monitor() {
     fi
     
     # 停止 Docker 監控服務
-    if docker ps --format "table {{.Names}}" | grep -q "^system_monitor_only$"; then
-        docker-compose --profile monitoring-only stop monitor-only
-        echo -e "${GREEN}✅ Docker 純監控服務已停止${NC}"
-        return 0
-    elif docker ps --format "table {{.Names}}" | grep -q "^system_monitor$"; then
-        echo -e "${YELLOW}⚠️  主服務正在運行（Web + 監控），只能停止整個服務${NC}"
-        echo -e "${YELLOW}💡 使用 '$0 stop' 停止所有服務${NC}"
+    if docker ps --format "table {{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+        echo -e "${YELLOW}⚠️  主服務正在運行（Web + 監控），請使用 '$0 stop' 停止整個服務${NC}"
         return 0
     else
         echo -e "${YELLOW}ℹ️  沒有找到運行中的監控服務${NC}"
@@ -318,9 +312,9 @@ stop_monitor_local() {
     fi
     
     # 通過進程名停止（如果pgrep可用）
-    if command -v pgrep &> /dev/null && pgrep -f "python src/system_monitor.py monitor" > /dev/null 2>&1; then
+    if command -v pgrep &> /dev/null && pgrep -f "python backend/cli.py monitor" > /dev/null 2>&1; then
         if command -v pkill &> /dev/null; then
-            pkill -f "python src/system_monitor.py monitor"
+            pkill -f "python backend/cli.py monitor"
             echo -e "${GREEN}✅ 監控背景程序已停止${NC}"
             stopped=true
         fi
@@ -342,13 +336,9 @@ restart_services() {
 }
 
 show_logs() {
-    container=${1:-monitor}
+    local container=${1:-backend}
     echo -e "${BLUE}📋 顯示容器日誌: ${container}${NC}"
-    if [[ "$container" == "daemon" ]]; then
-        docker-compose logs -f monitor-daemon
-    else
-        docker-compose logs -f monitor
-    fi
+    docker-compose logs -f "$container"
 }
 
 enter_shell() {
@@ -357,13 +347,13 @@ enter_shell() {
         docker exec -it $CONTAINER_NAME bash
     else
         echo -e "${YELLOW}⚠️  Web 容器未運行，啟動臨時容器...${NC}"
-        docker-compose run --rm monitor bash
+        docker-compose run --rm backend bash
     fi
 }
 
 monitor_status() {
     echo -e "${BLUE}📊 監控狀態檢查...${NC}"
-    python src/system_monitor.py status
+    python backend/cli.py status
 }
 
 generate_plots() {
@@ -373,7 +363,7 @@ generate_plots() {
     echo -e "${BLUE}📈 生成圖表 (${timespan})...${NC}"
     
     # 構建命令
-    local cmd="python src/system_monitor.py plot --timespan $timespan"
+    local cmd="python backend/cli.py plot --timespan $timespan"
     
     # 如果指定了資料庫
     if [[ -n "$database" ]]; then
@@ -435,7 +425,7 @@ plot_processes() {
     fi
     
     # 構建命令
-    local cmd="python src/system_monitor.py plot-processes ${pids[*]} $timespan"
+    local cmd="python backend/cli.py plot-processes ${pids[*]} $timespan"
     
     if [[ -n "$database" ]]; then
         if [[ ! -f "$database" ]]; then
@@ -460,19 +450,19 @@ plot_processes() {
 export_data() {
     output_file=${1:-"monitor_data_$(date +%Y%m%d_%H%M%S).csv"}
     echo -e "${BLUE}💾 導出數據到: ${output_file}${NC}"
-    python src/system_monitor.py export $output_file
+    python backend/cli.py export $output_file
     echo -e "${GREEN}✅ 數據已導出到 ${output_file}${NC}"
 }
 
 cleanup_data() {
     keep_days=${1:-30}
     echo -e "${BLUE}🧹 清理 ${keep_days} 天前的數據...${NC}"
-    python src/system_monitor.py cleanup --keep-days $keep_days
+    python backend/cli.py cleanup --keep-days $keep_days
 }
 
 clean_docker() {
     echo -e "${BLUE}🧹 清理 Docker 資源...${NC}"
-    docker-compose --profile monitoring down --rmi all --volumes --remove-orphans
+    docker-compose down --rmi all --volumes --remove-orphans
     echo -e "${GREEN}✅ Docker 資源已清理${NC}"
 }
 
@@ -489,28 +479,18 @@ show_service_status() {
     echo
     
     # 檢查主服務容器狀態（Web + 監控）
-    if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "^system_monitor"; then
+    if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "^${CONTAINER_NAME}"; then
         echo -e "${GREEN}🌐 主服務: 運行中（Web + 監控）${NC}"
-        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "^system_monitor"
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "^${CONTAINER_NAME}"
     else
         echo -e "${RED}🌐 主服務: 停止${NC}"
     fi
     
-    echo
-    
-    # 檢查純監控服務容器狀態
-    if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q "^system_monitor_only"; then
-        echo -e "${GREEN}🔄 純監控服務: 運行中${NC}"
-        docker ps --format "table {{.Names}}\t{{.Status}}" | grep "^system_monitor_only"
-    else
-        echo -e "${RED}🔄 純監控服務: 停止${NC}"
-    fi
-    
     # 檢查本機監控進程
     echo
-    if command -v pgrep &> /dev/null && pgrep -f "python src/system_monitor.py monitor" > /dev/null 2>&1; then
+    if command -v pgrep &> /dev/null && pgrep -f "python backend/cli.py monitor" > /dev/null 2>&1; then
         echo -e "${GREEN}🔄 本機監控: 運行中${NC}"
-        pgrep -f "python src/system_monitor.py monitor" 2>/dev/null | head -3 | while read pid; do
+        pgrep -f "python backend/cli.py monitor" 2>/dev/null | head -3 | while read pid; do
             echo -e "  PID: $pid"
         done
     elif [[ -f ".monitor_pid" ]]; then
@@ -583,7 +563,7 @@ main() {
             if [[ -f /.dockerenv ]]; then
                 WEB_PORT=${WEB_PORT:-5000}
                 echo -e "${GREEN}🌐 在容器內啟動Web服務 (端口: $WEB_PORT)...${NC}"
-                exec python app.py --host 0.0.0.0 --port $WEB_PORT
+                exec python backend/api.py --host 0.0.0.0 --port $WEB_PORT
             else
                 echo -e "${YELLOW}⚠️  此指令僅適用於容器內環境，請使用 'start-web'${NC}"
             fi

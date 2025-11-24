@@ -32,9 +32,9 @@ python scripts/cleanup.py --plots-days $PLOTS_KEEP_DAYS >> logs/cleanup.log 2>&1
 
 # 背景啟動監控服務
 echo "📊 啟動監控服務..."
-python src/system_monitor.py monitor --interval 1 > logs/monitor.log 2>&1 &
+python backend/cli.py monitor --interval 1 > logs/monitor.log 2>&1 &
 
 # 啟動Web服務（前台運行）
 WEB_PORT=${WEB_PORT:-5000}
 echo "🌐 啟動Web服務 (端口: $WEB_PORT)..."
-exec python -m uvicorn app:app --host 0.0.0.0 --port $WEB_PORT
+exec python -m uvicorn backend.api:app --host 0.0.0.0 --port $WEB_PORT

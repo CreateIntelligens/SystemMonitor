@@ -7,9 +7,12 @@
 import sys
 import os
 from pathlib import Path
+from datetime import datetime
 
-# 添加 src 目錄到 Python 路徑
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+BACKEND_ROOT = Path(__file__).resolve().parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+PROJECT_ROOT = BACKEND_ROOT.parent
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
@@ -20,9 +23,9 @@ import uvicorn
 from pydantic import BaseModel
 from typing import List
 
-from core import SystemMonitorCollector, MonitoringDatabase, SystemMonitorVisualizer
-from core.weekly_db_manager import weekly_db_manager
-from utils import Config
+from system_monitor.core import SystemMonitorCollector, MonitoringDatabase, SystemMonitorVisualizer
+from system_monitor.core.weekly_db_manager import weekly_db_manager
+from system_monitor.utils import Config
 
 # 創建 FastAPI 應用
 app = FastAPI(title="System Monitor", description="系統監控 Web 界面", version="1.0")
@@ -37,8 +40,13 @@ app.add_middleware(
 )
 
 # 設置模板和靜態文件
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory=str(BACKEND_ROOT / "webui" / "templates"))
+app.mount("/static", StaticFiles(directory=str(BACKEND_ROOT / "webui" / "static")), name="static")
+
+# 提供 React 前端（如果存在 frontend/dist）
+frontend_dist = PROJECT_ROOT / "frontend" / "dist"
+if frontend_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
 # 初始化組件
 config = Config()
@@ -56,22 +64,98 @@ class PlotProcessesRequest(BaseModel):
 
 @app.get("/api/databases")
 async def get_databases():
-    """獲取所有週資料庫列表"""
+    """獲取所有資料庫列表（包含週資料庫和其他 .db 檔案）"""
     try:
-        databases = weekly_db_manager.list_all_weekly_databases()
+        import glob
+
+        # 獲取週資料庫
+        weekly_databases = weekly_db_manager.list_all_weekly_databases()
+        weekly_filenames = {db['filename'] for db in weekly_databases}
+
+        # 掃描 data/ 目錄下所有 .db 檔案
+        data_dir = Path("data")
+        all_db_files = list(data_dir.glob("*.db"))
+
+        other_databases = []
+        for db_file in all_db_files:
+            if db_file.name not in weekly_filenames:
+                # 非週格式的資料庫
+                file_size = db_file.stat().st_size / (1024 * 1024)  # MB
+                mtime = datetime.fromtimestamp(db_file.stat().st_mtime)
+
+                other_databases.append({
+                    'filename': db_file.name,
+                    'full_path': str(db_file),
+                    'display_name': f"📁 {db_file.stem}",
+                    'size_mb': round(file_size, 2),
+                    'is_current': False,
+                    'year': mtime.year,
+                    'week': 0,
+                    'start_date': mtime.strftime('%Y-%m-%d'),
+                    'end_date': mtime.strftime('%Y-%m-%d'),
+                    'is_external': True  # 標記為外部資料庫
+                })
+
+        # 合併列表：週資料庫在前，其他資料庫在後
+        all_databases = weekly_databases + sorted(other_databases, key=lambda x: x['filename'])
+
         return {
             "success": True,
-            "databases": databases,
+            "databases": all_databases,
             "current_database": weekly_db_manager.get_current_database_path()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sources")
+async def get_sources(database_file: str = None):
+    """獲取資料庫中的所有來源（主機）"""
+    try:
+        from system_monitor.core import MonitoringDatabase
+
+        if database_file:
+            if not database_file.startswith('data/'):
+                database_file = f"data/{database_file}"
+            db_instance = MonitoringDatabase(database_file)
+        else:
+            db_instance = database
+
+        # 查詢所有不重複的 source
+        sources = set()
+        with db_instance._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 從各表獲取來源
+            for table in ['system_metrics', 'gpu_metrics', 'gpu_processes']:
+                try:
+                    cursor.execute(f"SELECT DISTINCT source FROM {table} WHERE source IS NOT NULL")
+                    for row in cursor.fetchall():
+                        if row[0]:
+                            sources.add(row[0])
+                except Exception:
+                    pass
+
+        return {
+            "success": True,
+            "sources": sorted(list(sources)),
+            "count": len(sources)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "sources": []}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    """主頁面"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    """主頁面 - 優先使用 React 前端"""
+    frontend_index = frontend_dist / "index.html"
+    if frontend_index.exists():
+        # 提供 React 前端
+        with open(frontend_index, 'r', encoding='utf-8') as f:
+            return HTMLResponse(content=f.read())
+    else:
+        # 回退到舊版模板
+        return templates.TemplateResponse("index.html", {"request": request})
 
 
 
@@ -103,33 +187,60 @@ async def get_status():
         import socket
         import platform
         import os
-        
-        # 獲取本機 IP 地址
+        import urllib.request
+
+        # 獲取主機名（優先從掛載的 /etc/hostname 讀取）
+        hostname = socket.gethostname()
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
+            host_hostname_path = "/host/etc/hostname"
+            if os.path.exists(host_hostname_path):
+                with open(host_hostname_path, 'r') as f:
+                    hostname = f.read().strip()
         except Exception:
-            local_ip = "127.0.0.1"
-        
+            pass
+
+        # 獲取外網 IP 地址
+        external_ip = None
+        try:
+            with urllib.request.urlopen("https://ifconfig.me/ip", timeout=3) as resp:
+                external_ip = resp.read().decode('utf-8').strip()
+        except Exception:
+            pass
+
+        # 備用：獲取內網 IP
+        local_ip = external_ip
+        if not local_ip:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+                s.close()
+            except Exception:
+                local_ip = "127.0.0.1"
+
         system_info = {
-            "hostname": socket.gethostname(),
+            "hostname": hostname,
             "platform": platform.system(),
             "cpu_count": os.cpu_count(),
             "local_ip": local_ip,
         }
         
-        # 獲取 GPU 資訊
+        # 獲取 GPU 資訊 - 支援多張 GPU
+        gpu_list = []
         if collector.is_gpu_available():
             try:
                 gpu_stats = collector.gpu_collector.get_gpu_stats()
-                if gpu_stats and isinstance(gpu_stats, list) and len(gpu_stats) > 0:
-                    # GPU 資訊是列表格式，取第一個 GPU
-                    first_gpu = gpu_stats[0]
-                    system_info["gpu_name"] = first_gpu.get("gpu_name", "Unknown GPU")
-                    system_info["gpu_memory_total"] = first_gpu.get("vram_total_mb", 0)
+                if gpu_stats and isinstance(gpu_stats, list):
+                    # GPU 資訊是列表格式，保存所有 GPU
+                    gpu_list = gpu_stats
+                    # 為了向後兼容，保留第一張GPU的資訊在 system_info 中
+                    if len(gpu_stats) > 0:
+                        first_gpu = gpu_stats[0]
+                        system_info["gpu_name"] = first_gpu.get("gpu_name", "Unknown GPU")
+                        system_info["gpu_memory_total"] = first_gpu.get("vram_total_mb", 0)
                 elif gpu_stats and isinstance(gpu_stats, dict):
+                    # 單GPU舊格式相容
+                    gpu_list = [gpu_stats]
                     system_info["gpu_name"] = gpu_stats.get("gpu_name", "Unknown GPU")
                     system_info["gpu_memory_total"] = gpu_stats.get("vram_total_mb", 0)
             except Exception as e:
@@ -140,6 +251,7 @@ async def get_status():
             **current_data,
             **stats,
             "gpu_available": collector.is_gpu_available(),
+            "gpu_list": gpu_list,  # 新增：所有 GPU 的詳細資訊列表
             "system_info": system_info
         }
     except Exception as e:
@@ -147,21 +259,22 @@ async def get_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 class PlotRequest(BaseModel):
-    database_file: str = "monitoring.db"
+    database_file: str | None = None
 
 @app.post("/api/plot/{timespan}")
-async def generate_plot(timespan: str, background_tasks: BackgroundTasks, 
+async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
                        req: PlotRequest = None):
     """生成圖表API - 支援週週分檔多資料庫"""
     try:
         # 決定使用哪個資料庫
         database_file = req.database_file if req and req.database_file else None
-        
-        if database_file:
+
+        from system_monitor.core import MonitoringDatabase
+
+        if database_file and database_file != "monitoring.db":
             # 使用指定的單一資料庫
             if not database_file.startswith('data/'):
                 database_file = f"data/{database_file}"
-            from core import MonitoringDatabase
             custom_database = MonitoringDatabase(database_file)
             metrics = custom_database.get_metrics_by_timespan(timespan)
             db_name = Path(database_file).name
@@ -184,25 +297,117 @@ async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
         if not metrics:
             return {"success": False, "error": f"資料庫 {db_name} 中沒有 {timespan} 時間範圍的數據"}
         
-        # 生成圖表
+        # 生成圖表（只生成 3 張圖）
         charts = []
-        
+
         overview_path = visualizer.plot_system_overview(metrics, timespan=timespan)
         charts.append({"title": f"系統概覽 ({db_name})", "path": Path(overview_path).relative_to("plots")})
-        
-        comparison_path = visualizer.plot_resource_comparison(metrics)
-        charts.append({"title": f"資源對比 ({db_name})", "path": Path(comparison_path).relative_to("plots")})
-        
+
         memory_path = visualizer.plot_memory_usage(metrics)
         charts.append({"title": f"記憶體使用 ({db_name})", "path": Path(memory_path).relative_to("plots")})
-        
+
         distribution_path = visualizer.plot_usage_distribution(metrics)
         charts.append({"title": f"使用率分佈 ({db_name})", "path": Path(distribution_path).relative_to("plots")})
-        
+
         return {"success": True, "charts": charts, "database": db_name}
-        
+
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+class MultiGPUPlotRequest(BaseModel):
+    gpu_ids: List[int] | None = None  # None = all GPUs
+    database_file: str | None = None
+
+
+@app.post("/api/plot/gpu/{timespan}")
+async def generate_gpu_plot(timespan: str, req: MultiGPUPlotRequest = None):
+    """生成多 GPU 對比圖表 API"""
+    try:
+        gpu_ids = req.gpu_ids if req else None
+        database_file = req.database_file if req and req.database_file else None
+
+        from system_monitor.core import MonitoringDatabase
+
+        # 獲取 GPU 指標數據
+        if database_file:
+            if not database_file.startswith('data/'):
+                database_file = f"data/{database_file}"
+            db_instance = MonitoringDatabase(database_file)
+            db_name = Path(database_file).name
+        else:
+            # 使用週週分檔系統
+            db_paths = weekly_db_manager.get_database_for_timespan(timespan)
+            all_metrics = []
+            for db_path in db_paths:
+                if os.path.exists(db_path):
+                    temp_db = MonitoringDatabase(db_path)
+                    db_metrics = temp_db.get_gpu_metrics_by_timespan(timespan, gpu_id=None)
+                    if db_metrics:
+                        all_metrics.extend(db_metrics)
+
+            if not all_metrics:
+                return {"success": False, "error": f"沒有 GPU 指標數據"}
+
+            # 生成圖表
+            chart_path = visualizer.plot_multi_gpu(all_metrics, gpu_ids=gpu_ids, timespan=timespan)
+
+            return {
+                "success": True,
+                "chart": {
+                    "title": f"多 GPU 監控 ({timespan})",
+                    "path": str(Path(chart_path).relative_to("plots"))
+                },
+                "gpu_count": len(set(m.get('gpu_id') for m in all_metrics)),
+                "database": f"週週分檔系統 ({len(db_paths)} 個資料庫)"
+            }
+
+        # 單一資料庫模式
+        gpu_metrics = db_instance.get_gpu_metrics_by_timespan(timespan, gpu_id=None)
+        if not gpu_metrics:
+            return {"success": False, "error": f"資料庫 {db_name} 中沒有 GPU 指標數據"}
+
+        chart_path = visualizer.plot_multi_gpu(gpu_metrics, gpu_ids=gpu_ids, timespan=timespan)
+
+        return {
+            "success": True,
+            "chart": {
+                "title": f"多 GPU 監控 ({timespan})",
+                "path": str(Path(chart_path).relative_to("plots"))
+            },
+            "gpu_count": len(set(m.get('gpu_id') for m in gpu_metrics)),
+            "database": db_name
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/gpu-list")
+async def get_gpu_list():
+    """獲取可用的 GPU 列表"""
+    try:
+        # 從當前資料庫獲取 GPU 列表
+        gpu_metrics = database.get_gpu_metrics_by_timespan("1h")
+
+        gpu_map = {}
+        for m in gpu_metrics:
+            gpu_id = m.get('gpu_id')
+            if gpu_id is not None and gpu_id not in gpu_map:
+                gpu_map[gpu_id] = {
+                    "gpu_id": gpu_id,
+                    "gpu_name": m.get('gpu_name', f'GPU {gpu_id}')
+                }
+
+        gpu_list = sorted(gpu_map.values(), key=lambda x: x['gpu_id'])
+
+        return {
+            "success": True,
+            "gpus": gpu_list
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "gpus": []}
+
 
 @app.get("/api/gpu-processes")
 async def get_gpu_processes():
@@ -223,7 +428,7 @@ async def get_all_processes(timespan: str, req: PlotRequest = None):
     """獲取指定時間範圍內的所有歷史進程（包括已結束的）- 支援多資料庫"""
     try:
         from datetime import datetime, timedelta
-        from core import MonitoringDatabase
+        from system_monitor.core import MonitoringDatabase
         
         # 決定使用哪個資料庫
         database_file = req.database_file if req and req.database_file else "monitoring.db"
@@ -300,7 +505,7 @@ async def plot_multiple_processes(req: PlotProcessesRequest):
             # 使用指定的資料庫，確保在 data/ 目錄下
             if not database_file.startswith('data/'):
                 database_file = f"data/{database_file}"
-            from core import MonitoringDatabase
+            from system_monitor.core import MonitoringDatabase
             custom_database = MonitoringDatabase(database_file)
             db_instance = custom_database
         else:
@@ -394,7 +599,7 @@ async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks
         return {"success": False, "error": str(e)}
 
 # 靜態文件服務
-app.mount("/plots", StaticFiles(directory="plots"), name="plots")
+app.mount("/plots", StaticFiles(directory=str(PROJECT_ROOT / "plots")), name="plots")
 
 @app.get("/favicon.ico")
 async def favicon():

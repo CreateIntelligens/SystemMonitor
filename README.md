@@ -10,7 +10,7 @@
 ./monitor.sh start
 
 # 或直接運行Web界面
-python app.py --host 0.0.0.0 --port 5000
+python backend/api.py --host 0.0.0.0 --port 5000
 # 訪問: http://localhost:5000
 ```
 
@@ -73,27 +73,27 @@ python app.py --host 0.0.0.0 --port 5000
 
 #### 監控操作
 ```bash
-python src/system_monitor.py monitor           # 開始監控
-python src/system_monitor.py status            # 查看狀態
-python src/system_monitor.py gpu-processes     # 查看GPU進程
+python backend/cli.py monitor           # 開始監控
+python backend/cli.py status            # 查看狀態
+python backend/cli.py gpu-processes     # 查看GPU進程
 ```
 
 #### 圖表生成
 ```bash
 # 系統圖表
-python src/system_monitor.py plot --timespan 24h
-python src/system_monitor.py plot --timespan 2d --database server2.db
+python backend/cli.py plot --timespan 24h
+python backend/cli.py plot --timespan 2d --database server2.db
 
 # 進程對比圖
-python src/system_monitor.py plot-processes 1234 5678 2h
-python src/system_monitor.py plot-processes 999 1h --database remote.db --output result.png
+python backend/cli.py plot-processes 1234 5678 2h
+python backend/cli.py plot-processes 999 1h --database remote.db --output result.png
 ```
 
 #### 數據操作
 ```bash
-python src/system_monitor.py export data.csv
-python src/system_monitor.py cleanup --keep-days 30
-python src/system_monitor.py web --host 0.0.0.0 --port 5000
+python backend/cli.py export data.csv
+python backend/cli.py cleanup --keep-days 30
+python backend/cli.py web --host 0.0.0.0 --port 5000
 ```
 
 ### Web界面使用
@@ -150,22 +150,27 @@ python src/system_monitor.py web --host 0.0.0.0 --port 5000
 
 ```
 system-monitor/
-├── app.py                    # 主程式入口
+├── backend/
+│   ├── api.py                # FastAPI 入口（python backend/api.py）
+│   ├── cli.py                # CLI 入口（python backend/cli.py）
+│   ├── config/
+│   │   └── config.json       # 預設設定，可自訂
+│   ├── requirements.txt      # 後端依賴
+│   ├── system_monitor/
+│   │   ├── cli.py            # SystemMonitor 類別 + 命令列邏輯
+│   │   ├── core/             # collectors/storage/visualizer
+│   │   ├── utils/            # config/logger
+│   │   └── web/              # 內嵌 FastAPI app
+│   └── webui/                # 備用模板/靜態資源
+├── frontend/                 # React 前端專案
+├── scripts/                  # run_local、cleanup 等輔助腳本
 ├── monitor.sh                # 操作腳本（支援多資料庫）
-├── src/
-│   ├── system_monitor.py     # CLI工具（支援多資料庫）
-│   ├── core/
-│   │   ├── collectors.py     # 數據收集器
-│   │   ├── storage.py        # 數據存儲
-│   │   └── visualizer.py     # 圖表生成（4合1進程對比）
-│   └── utils/
-├── templates/
-│   └── index.html           # Web界面（多資料庫選擇）
-├── static/js/
-│   └── app.js              # 前端邏輯（多資料庫支援）
-├── plots/                  # 圖表輸出目錄
-├── monitoring.db           # 主資料庫
-└── *.db                   # 其他機器的資料庫檔案
+├── entrypoint.sh             # Docker 入口
+├── Dockerfile
+├── docker-compose.yml
+├── data/                     # SQLite DB（runtime）
+├── logs/                     # 日誌
+└── plots/                    # 圖表輸出
 ```
 
 ## 環境需求
@@ -193,7 +198,7 @@ ls *.db  # 檢查資料庫檔案
 ```bash
 netstat -tlnp | grep 5000
 # 或更換端口
-python app.py --port 8080
+python backend/api.py --port 8080
 ```
 
 ---

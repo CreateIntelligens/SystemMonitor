@@ -77,19 +77,71 @@ function updateDatabaseSelectors(databases) {
     });
 }
 
+// 創建單個GPU卡片的HTML（參考 gpu-hot 的動態卡片創建方式）
+function createGPUCard(gpu, index) {
+    const gpuName = gpu.gpu_name || `GPU ${index}`;
+    const gpuUsage = gpu.gpu_usage !== null && gpu.gpu_usage !== undefined ? gpu.gpu_usage.toFixed(1) + '%' : 'N/A';
+    const vramUsed = gpu.vram_used_mb ? Math.round(gpu.vram_used_mb/1024*10)/10 : 0;
+    const vramTotal = gpu.vram_total_mb ? Math.round(gpu.vram_total_mb/1024*10)/10 : 0;
+    const vramUsage = gpu.vram_usage !== null && gpu.vram_usage !== undefined ? gpu.vram_usage.toFixed(1) : 'N/A';
+    const temperature = gpu.temperature !== null && gpu.temperature !== undefined ? gpu.temperature + '°C' : 'N/A';
+
+    return `
+        <div class="status-card" data-gpu-id="${index}">
+            <h3>🎮 ${gpuName}</h3>
+            <div class="metric"><span>GPU ID</span><span>#${index}</span></div>
+            <div class="metric"><span>使用率</span><span>${gpuUsage}</span></div>
+            <div class="metric">
+                <span>VRAM</span>
+                <span title="某些環境下無法顯示單個進程的GPU記憶體使用量">
+                    ${vramUsed}GB / ${vramTotal}GB (${vramUsage}%)
+                </span>
+            </div>
+            <div class="metric"><span>溫度</span><span>${temperature}</span></div>
+        </div>
+    `;
+}
+
 function updateStatusDisplay(data) {
     if (data.system_info) {
         const hostInfo = `${data.system_info.hostname || '未知主機'}`;
         const ipInfo = data.system_info.local_ip ? ` (${data.system_info.local_ip})` : '';
         document.getElementById('hostname').textContent = hostInfo + ipInfo;
     }
+
     const grid = document.getElementById('statusGrid');
-    grid.innerHTML = `
+
+    // 生成 CPU 和記憶體卡片
+    let cardsHTML = `
         <div class="status-card"><h3>🖥️ CPU (${data.system_info?.cpu_count|| 'N/A'}核心)</h3><div class="metric"><span>使用率</span><span>${data.cpu_usage?.toFixed(1)}%</span></div><div class="metric"><span>來源</span><span>${data.cpu_source}</span></div></div>
         <div class="status-card"><h3>💾 記憶體 (${data.ram_total_gb?.toFixed(1)}GB)</h3><div class="metric"><span>已使用</span><span>${data.ram_used_gb?.toFixed(1)}GB / ${data.ram_total_gb?.toFixed(1)}GB</span></div><div class="metric"><span>使用率</span><span>${data.ram_usage?.toFixed(1)}%</span></div><div class="metric"><span>來源</span><span>${data.ram_source}</span></div></div>
-        <div class="status-card"><h3>🎮 ${data.system_info?.gpu_name|| 'GPU'}</h3><div class="metric"><span>使用率</span><span>${data.gpu_usage?data.gpu_usage.toFixed(1)+'%':'N/A'}</span></div><div class="metric"><span>VRAM總用量</span><span title="某些環境下無法顯示單個進程的GPU記憶體使用量">${data.vram_used_mb?Math.round(data.vram_used_mb/1024*10)/10+'GB':'N/A'} / ${data.vram_total_mb?Math.round(data.vram_total_mb/1024*10)/10+'GB':'N/A'}</span></div><div class="metric"><span>溫度</span><span>${data.gpu_temperature?data.gpu_temperature+'°C':'N/A'}</span></div></div>
+    `;
+
+    // 動態生成 GPU 卡片（支援多張GPU）
+    if (data.gpu_list && Array.isArray(data.gpu_list) && data.gpu_list.length > 0) {
+        // 多GPU模式：為每張GPU創建一個卡片
+        data.gpu_list.forEach((gpu, index) => {
+            cardsHTML += createGPUCard(gpu, index);
+        });
+    } else if (data.gpu_usage !== null || data.vram_used_mb !== null) {
+        // 向後兼容：使用舊的單GPU資料格式
+        const legacyGPU = {
+            gpu_name: data.system_info?.gpu_name || 'GPU',
+            gpu_usage: data.gpu_usage,
+            vram_used_mb: data.vram_used_mb,
+            vram_total_mb: data.vram_total_mb,
+            vram_usage: data.vram_usage,
+            temperature: data.gpu_temperature
+        };
+        cardsHTML += createGPUCard(legacyGPU, 0);
+    }
+
+    // 資料庫卡片
+    cardsHTML += `
         <div class="status-card"><h3>📈 資料庫</h3><div class="metric"><span>記錄數</span><span>${data.total_records?.toLocaleString()}</span></div><div class="metric"><span>大小</span><span>${data.database_size_mb?.toFixed(2)} MB</span></div><div class="metric"><span>時間範圍</span><span>${data.earliest_record?new Date(data.earliest_record).toLocaleDateString('zh-TW'):'N/A'} ~ 現在</span></div></div>
     `;
+
+    grid.innerHTML = cardsHTML;
 }
 
 // 更新設定顯示

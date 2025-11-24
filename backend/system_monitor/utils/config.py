@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Dict, Any
 import json
 
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_PATH = BACKEND_ROOT / "config" / "config.json"
+
 
 class Config:
     """配置管理器"""
@@ -47,7 +50,7 @@ class Config:
         Args:
             config_file: 配置文件路徑
         """
-        self.config_file = config_file or 'config/config.json'
+        self.config_file = config_file or str(DEFAULT_CONFIG_PATH)
         self.config = self.DEFAULT_CONFIG.copy()
         self.load_config()
         self.create_directories()

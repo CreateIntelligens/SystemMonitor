@@ -12,10 +12,12 @@ from datetime import datetime
 import argparse
 import time
 
-# 添加 src 目錄到 Python 路徑
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
-from core.storage import MonitoringDatabase
+from system_monitor.core.storage import MonitoringDatabase
 
 
 def cleanup_system(plots_keep_days=1, plots_dir="plots"):

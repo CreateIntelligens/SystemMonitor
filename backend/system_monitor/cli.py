@@ -12,9 +12,9 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from core import SystemMonitorCollector, MonitoringDatabase, SystemMonitorVisualizer
-from core.weekly_db_manager import weekly_db_manager
-from utils import Config, setup_logger
+from .core import SystemMonitorCollector, MonitoringDatabase, SystemMonitorVisualizer
+from .core.weekly_db_manager import weekly_db_manager
+from .utils import Config, setup_logger
 
 # 可選的 Web 相關導入
 try:
@@ -80,10 +80,13 @@ class SystemMonitor:
                 
                 # 收集基本系統數據
                 data = self.collector.collect_simple()
-                
+
                 # 收集 GPU 進程數據
                 gpu_processes = self.collector.get_top_gpu_processes(limit=5)
-                
+
+                # 收集所有 GPU 指標數據（多GPU支援）
+                gpu_stats = self.collector.gpu_collector.get_gpu_stats()
+
                 # 防禦性程式設計：確保傳遞給資料庫的數據不含None
                 for key in ['gpu_usage', 'vram_usage', 'vram_used_mb', 'vram_total_mb', 'gpu_temperature']:
                     if data.get(key) is None:
@@ -91,7 +94,13 @@ class SystemMonitor:
 
                 # 存儲到數據庫
                 success = self.database.insert_metrics(data)
-                
+
+                # 存儲多GPU指標數據到新的 gpu_metrics 表格
+                if gpu_stats and isinstance(gpu_stats, list):
+                    from datetime import datetime
+                    timestamp = datetime.fromisoformat(data['timestamp'])
+                    self.database.insert_gpu_metrics(gpu_stats, timestamp)
+
                 # 存儲 GPU 進程數據
                 if gpu_processes:
                     from datetime import datetime

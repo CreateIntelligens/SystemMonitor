@@ -8,6 +8,11 @@ import subprocess
 import os
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_DIR = REPO_ROOT / "backend"
+CLI_ENTRY = BACKEND_DIR / "cli.py"
+REQUIREMENTS_FILE = BACKEND_DIR / "requirements.txt"
+
 def check_python():
     """檢查 Python 環境"""
     version = sys.version_info
@@ -32,14 +37,14 @@ def install_dependencies():
         if choice in ['y', 'yes']:
             print("安裝依賴中...")
             try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(REQUIREMENTS_FILE)])
                 print("依賴安裝完成")
                 return True
             except subprocess.CalledProcessError:
                 print("依賴安裝失敗")
                 return False
         else:
-            print("💡 請手動執行: pip install -r requirements.txt")
+            print(f"💡 請手動執行: pip install -r {REQUIREMENTS_FILE}")
             return False
 
 def check_gpu():
@@ -72,14 +77,14 @@ def main():
     check_gpu()
     
     print("\n🎯 可用指令:")
-    print("  python system_monitor.py status         # 查看狀態")
-    print("  python system_monitor.py monitor        # 開始監控")  
-    print("  python system_monitor.py web            # Web 介面")
-    print("  python system_monitor.py plot 24h       # 生成圖表")
+    print("  python backend/cli.py status         # 查看狀態")
+    print("  python backend/cli.py monitor        # 開始監控")  
+    print("  python backend/cli.py web            # Web 介面")
+    print("  python backend/cli.py plot 24h       # 生成圖表")
     
     # 如果有參數，直接執行
     if len(sys.argv) > 1:
-        cmd = [sys.executable, "system_monitor.py"] + sys.argv[1:]
+        cmd = [sys.executable, str(CLI_ENTRY)] + sys.argv[1:]
         print(f"\n🔄 執行: {' '.join(cmd)}")
         subprocess.call(cmd)
     else:

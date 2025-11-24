@@ -122,14 +122,119 @@ class GPUCollector:
             return None
     
     def get_gpu_stats(self) -> Optional[List[Dict]]:
-        """獲取 GPU 使用統計"""
+        """獲取 GPU 使用統計 (優先使用 NVML，降級使用 nvidia-smi)"""
+        if self.nvml_initialized:
+            return self._get_gpu_stats_nvml()
+        
+        return self._get_gpu_stats_smi()
+
+    def _get_gpu_stats_nvml(self) -> List[Dict]:
+        """使用 NVML 獲取詳細 GPU 統計"""
+        gpu_stats = []
+        try:
+            device_count = pynvml.nvmlDeviceGetCount()
+            for i in range(device_count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                stats = {
+                    'gpu_id': i,
+                    'gpu_name': self._safe_get_str(pynvml.nvmlDeviceGetName, handle),
+                    'timestamp': datetime.now().isoformat()
+                }
+
+                # Utilization
+                try:
+                    util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                    stats['gpu_usage'] = float(util.gpu)
+                    stats['memory_utilization'] = float(util.memory)
+                except:
+                    stats['gpu_usage'] = 0
+                    stats['memory_utilization'] = 0
+
+                # Memory
+                try:
+                    mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    stats['vram_used_mb'] = mem.used // (1024 * 1024)
+                    stats['vram_total_mb'] = mem.total // (1024 * 1024)
+                    stats['vram_usage'] = round((mem.used / mem.total) * 100, 2) if mem.total > 0 else 0
+                    stats['memory_free'] = mem.free // (1024 * 1024)
+                except:
+                    pass
+
+                # Temperature
+                try:
+                    stats['temperature'] = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+                except:
+                    stats['temperature'] = 0
+
+                # Power
+                try:
+                    power = pynvml.nvmlDeviceGetPowerUsage(handle)
+                    stats['power_draw'] = power / 1000.0  # mW to W
+                except:
+                    stats['power_draw'] = 0
+                
+                try:
+                    limit = pynvml.nvmlDeviceGetPowerManagementLimit(handle)
+                    stats['power_limit'] = limit / 1000.0
+                except:
+                    stats['power_limit'] = 0
+
+                # Fan Speed
+                try:
+                    stats['fan_speed'] = pynvml.nvmlDeviceGetFanSpeed(handle)
+                except:
+                    stats['fan_speed'] = 0
+
+                # Clocks
+                try:
+                    stats['clock_graphics'] = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
+                    stats['clock_memory'] = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
+                    stats['clock_sm'] = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM)
+                except:
+                    pass
+
+                # PCIe
+                try:
+                    stats['pcie_gen'] = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(handle)
+                    stats['pcie_width'] = pynvml.nvmlDeviceGetCurrPcieLinkWidth(handle)
+                    stats['pcie_tx'] = pynvml.nvmlDeviceGetPcieThroughput(handle, pynvml.NVML_PCIE_UTIL_TX_BYTES) / 1024.0 # KB/s
+                    stats['pcie_rx'] = pynvml.nvmlDeviceGetPcieThroughput(handle, pynvml.NVML_PCIE_UTIL_RX_BYTES) / 1024.0 # KB/s
+                except:
+                    pass
+                
+                # Performance State
+                try:
+                    pstate = pynvml.nvmlDeviceGetPerformanceState(handle)
+                    stats['performance_state'] = f'P{pstate}'
+                except:
+                    pass
+
+                gpu_stats.append(stats)
+        except Exception as e:
+            if self.debug:
+                print(f"[WARNING] NVML stats collection failed: {e}")
+            return self._get_gpu_stats_smi() # Fallback
+            
+        return gpu_stats
+
+    def _safe_get_str(self, func, *args):
+        try:
+            val = func(*args)
+            if isinstance(val, bytes):
+                return val.decode('utf-8')
+            return str(val)
+        except:
+            return "Unknown"
+
+    def _get_gpu_stats_smi(self) -> Optional[List[Dict]]:
+        """使用 nvidia-smi 獲取 GPU 統計 (備用)"""
         if not self.gpu_available:
             return None
         
         try:
             cmd = [
                 'nvidia-smi',
-                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name',
+                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name,power.draw,power.limit,fan.speed,clocks.gr,clocks.mem',
                 '--format=csv,noheader,nounits'
             ]
             
@@ -146,13 +251,21 @@ class GPUCollector:
                     continue
                     
                 parts = [part.strip() for part in line.split(',')]
+                # Expected: util, mem_used, mem_total, temp, name, power, power_limit, fan, clock_gr, clock_mem
                 if len(parts) >= 5:
                     try:
-                        gpu_usage = int(parts[0]) if parts[0] and parts[0] != 'N/A' and parts[0].strip() else 0
-                        memory_used = int(parts[1]) if parts[1] and parts[1] != 'N/A' and parts[1].strip() else 0
-                        memory_total = int(parts[2]) if parts[2] and parts[2] != 'N/A' and parts[2].strip() else 1
-                        temperature = int(parts[3]) if parts[3] and parts[3] != 'N/A' and parts[3].strip() else 0
-                        gpu_name = parts[4] if len(parts) > 4 else 'Unknown GPU'
+                        gpu_usage = self._parse_int(parts[0])
+                        memory_used = self._parse_int(parts[1])
+                        memory_total = self._parse_int(parts[2])
+                        temperature = self._parse_int(parts[3])
+                        gpu_name = parts[4]
+                        
+                        # Extended metrics (might fail if old nvidia-smi)
+                        power_draw = self._parse_float(parts[5]) if len(parts) > 5 else 0
+                        power_limit = self._parse_float(parts[6]) if len(parts) > 6 else 0
+                        fan_speed = self._parse_int(parts[7]) if len(parts) > 7 else 0
+                        clock_graphics = self._parse_int(parts[8]) if len(parts) > 8 else 0
+                        clock_memory = self._parse_int(parts[9]) if len(parts) > 9 else 0
                         
                         vram_usage = (memory_used / memory_total * 100) if memory_total > 0 else 0
                         
@@ -163,7 +276,12 @@ class GPUCollector:
                             'vram_used_mb': memory_used,
                             'vram_total_mb': memory_total,
                             'vram_usage': round(vram_usage, 2),
-                            'temperature': temperature
+                            'temperature': temperature,
+                            'power_draw': power_draw,
+                            'power_limit': power_limit,
+                            'fan_speed': fan_speed,
+                            'clock_graphics': clock_graphics,
+                            'clock_memory': clock_memory
                         })
                         
                     except (ValueError, ZeroDivisionError):
@@ -173,6 +291,18 @@ class GPUCollector:
             
         except (subprocess.TimeoutExpired, subprocess.SubprocessError):
             return None
+
+    def _parse_int(self, val):
+        try:
+            return int(float(val))
+        except:
+            return 0
+
+    def _parse_float(self, val):
+        try:
+            return float(val)
+        except:
+            return 0.0
     
     def get_gpu_processes(self) -> Optional[List[Dict]]:
         """獲取 GPU 進程信息"""
@@ -268,7 +398,7 @@ class GPUCollector:
                                 'gpu_utilization': gpu_utilization,
                                 'cpu_percent': round(p.cpu_percent(), 1),
                                 'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                                'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
+                                'start_time': datetime.fromtimestamp(p.create_time()).isoformat(),
                                 'type': proc_type,
                                 'container': container_name,
                                 'container_source': container_source
@@ -366,7 +496,7 @@ class GPUCollector:
                                     'gpu_utilization': 0,
                                     'cpu_percent': round(p.cpu_percent(), 1),
                                     'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                                    'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
+                                    'start_time': datetime.fromtimestamp(p.create_time()).isoformat(),
                                     'type': f'NVIDIA {"Graphics" if proc_type == "G" else "Compute"}',
                                     'container': container_name,
                                     'container_source': container_source
@@ -424,7 +554,7 @@ class GPUCollector:
                     'gpu_utilization': gpu_utilization,
                     'cpu_percent': round(p.cpu_percent(), 1),
                     'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                    'start_time': datetime.fromtimestamp(p.create_time()).strftime('%m-%d %H:%M:%S'),
+                    'start_time': datetime.fromtimestamp(p.create_time()).isoformat(),
                     'type': proc_type,
                     'container': container_name,
                     'container_source': container_source

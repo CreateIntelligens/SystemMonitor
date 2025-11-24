@@ -16,19 +16,22 @@ RUN apt-get update && apt-get install -y \
 # 創建工作目錄
 WORKDIR /app
 
-# 只複製 requirements.txt 來安裝依賴
-COPY requirements.txt .
+# 只複製後端 requirements.txt 來安裝依賴
+COPY backend/requirements.txt ./requirements.txt
 
 # 安裝 Python 依賴
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製並設置腳本權限
-COPY scripts/start_with_cleanup.sh scripts/
-RUN chmod +x scripts/start_with_cleanup.sh
+# 複製後端程式碼與腳本
+COPY backend ./backend
+COPY entrypoint.sh monitor.sh ./ 
+COPY scripts ./scripts
 
-# 暴露 Web 介面端口（可透過環境變數調整）
-ARG WEB_PORT=5000
-EXPOSE $WEB_PORT
+# 確保腳本可執行
+RUN chmod +x entrypoint.sh monitor.sh && mkdir -p logs data plots
 
-# 預設指令
-CMD ["python", "app.py", "status"]
+# 暴露 API 端口
+EXPOSE 8000
+
+# 使用 entrypoint 啟動
+CMD ["./entrypoint.sh"]
