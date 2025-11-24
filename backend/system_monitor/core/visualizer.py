@@ -642,6 +642,27 @@ class SystemMonitorVisualizer:
         df['datetime'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('datetime')
 
+        # 降採樣：每個 GPU 最多 500 個點
+        max_points_per_gpu = 500
+        available_gpus = sorted(df['gpu_id'].unique())
+
+        if len(df) > max_points_per_gpu * len(available_gpus):
+            resampled_dfs = []
+            for gpu_id in available_gpus:
+                gpu_df = df[df['gpu_id'] == gpu_id].copy()
+                if len(gpu_df) > max_points_per_gpu:
+                    time_span = gpu_df['datetime'].max() - gpu_df['datetime'].min()
+                    interval = time_span / max_points_per_gpu
+                    gpu_df.set_index('datetime', inplace=True)
+                    numeric_cols = gpu_df.select_dtypes(include=[np.number]).columns
+                    gpu_df_resampled = gpu_df[numeric_cols].resample(interval).mean()
+                    gpu_df_resampled['gpu_id'] = gpu_id
+                    gpu_df_resampled.reset_index(inplace=True)
+                    resampled_dfs.append(gpu_df_resampled)
+                else:
+                    resampled_dfs.append(gpu_df)
+            df = pd.concat(resampled_dfs, ignore_index=True)
+
         # 獲取所有可用的 GPU ID
         available_gpus = sorted(df['gpu_id'].unique())
 
@@ -790,7 +811,7 @@ class SystemMonitorVisualizer:
             plt.tight_layout(rect=[0, 0, 1, 0.95])
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             output_path = self.output_dir / f'multi_gpu_{timestamp}.png'
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.savefig(output_path, dpi=100, bbox_inches='tight')
             plt.close()
 
         return str(output_path)

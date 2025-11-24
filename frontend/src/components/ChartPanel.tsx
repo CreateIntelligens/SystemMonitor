@@ -75,6 +75,7 @@ export function ChartPanel() {
       if (chartMode === 'system') {
         const response = await axios.post<PlotResponse>(`/api/plot/${timespan}`, {
           database_file: selectedDb || undefined,
+          return_base64: true,
         });
 
         if (response.data.success && response.data.charts) {
@@ -92,6 +93,7 @@ export function ChartPanel() {
         }>(`/api/plot/gpu/${timespan}`, {
           gpu_ids: selectedGpus.length === gpuList.length ? undefined : selectedGpus,
           database_file: selectedDb || undefined,
+          return_base64: true,
         });
 
         if (response.data.success && response.data.chart) {
@@ -333,7 +335,7 @@ export function ChartPanel() {
               </div>
               <div className="p-4 bg-gray-900/50 flex justify-center">
                 <img
-                  src={`/plots/${chart.path}?t=${Date.now()}`}
+                  src={chart.base64 ? `data:image/png;base64,${chart.base64}` : `/plots/${chart.path}?t=${Date.now()}`}
                   alt={chart.title}
                   className="w-full h-auto max-h-[600px] object-contain rounded-lg"
                 />
@@ -361,7 +363,7 @@ export function ChartPanel() {
             </div>
             <div className="p-4 bg-gray-900/50 flex justify-center">
               <img
-                src={`/plots/${gpuChart.path}?t=${Date.now()}`}
+                src={gpuChart.base64 ? `data:image/png;base64,${gpuChart.base64}` : `/plots/${gpuChart.path}?t=${Date.now()}`}
                 alt={gpuChart.title}
                 className="w-full h-auto max-h-[700px] object-contain rounded-lg"
               />
@@ -403,7 +405,7 @@ export function ChartPanel() {
               </button>
             </div>
             <img
-              src={`/plots/${expandedChart.path}?t=${Date.now()}`}
+              src={expandedChart.base64 ? `data:image/png;base64,${expandedChart.base64}` : `/plots/${expandedChart.path}?t=${Date.now()}`}
               alt={expandedChart.title}
               className="w-full h-auto"
             />

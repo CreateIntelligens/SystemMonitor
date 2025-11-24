@@ -6,6 +6,7 @@
 
 import sys
 import os
+import base64
 from pathlib import Path
 from datetime import datetime
 
@@ -61,6 +62,7 @@ class PlotProcessesRequest(BaseModel):
     pids: List[int]
     timespan: str = "1h"
     database_file: str = "monitoring.db"
+    return_base64: bool = False
 
 
 @app.get("/api/databases")
@@ -261,6 +263,13 @@ async def get_status():
 
 class PlotRequest(BaseModel):
     database_file: str | None = None
+    return_base64: bool = False
+
+
+def encode_image_to_base64(file_path: str) -> str:
+    """將圖片檔案編碼為 base64"""
+    with open(file_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
 
 @app.post("/api/plot/{timespan}")
 async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
@@ -300,9 +309,16 @@ async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
         
         # 生成圖表（只生成 1 張圖：CPU+RAM 和 GPU+VRAM）
         charts = []
+        return_base64 = req.return_base64 if req else False
 
         overview_path = await run_in_threadpool(visualizer.plot_system_overview, metrics, timespan=timespan)
-        charts.append({"title": f"系統概覽 ({db_name})", "path": Path(overview_path).relative_to("plots")})
+        chart_data = {
+            "title": f"系統概覽 ({db_name})",
+            "path": str(Path(overview_path).relative_to("plots"))
+        }
+        if return_base64:
+            chart_data["base64"] = encode_image_to_base64(overview_path)
+        charts.append(chart_data)
 
         return {"success": True, "charts": charts, "database": db_name}
 
@@ -313,6 +329,7 @@ async def generate_plot(timespan: str, background_tasks: BackgroundTasks,
 class MultiGPUPlotRequest(BaseModel):
     gpu_ids: List[int] | None = None  # None = all GPUs
     database_file: str | None = None
+    return_base64: bool = False
 
 
 @app.post("/api/plot/gpu/{timespan}")
@@ -346,13 +363,18 @@ async def generate_gpu_plot(timespan: str, req: MultiGPUPlotRequest = None):
 
             # 生成圖表
             chart_path = await run_in_threadpool(visualizer.plot_multi_gpu, all_metrics, gpu_ids=gpu_ids, timespan=timespan)
+            return_base64 = req.return_base64 if req else False
+
+            chart_data = {
+                "title": f"多 GPU 監控 ({timespan})",
+                "path": str(Path(chart_path).relative_to("plots"))
+            }
+            if return_base64:
+                chart_data["base64"] = encode_image_to_base64(chart_path)
 
             return {
                 "success": True,
-                "chart": {
-                    "title": f"多 GPU 監控 ({timespan})",
-                    "path": str(Path(chart_path).relative_to("plots"))
-                },
+                "chart": chart_data,
                 "gpu_count": len(set(m.get('gpu_id') for m in all_metrics)),
                 "database": f"週週分檔系統 ({len(db_paths)} 個資料庫)"
             }
@@ -363,13 +385,18 @@ async def generate_gpu_plot(timespan: str, req: MultiGPUPlotRequest = None):
             return {"success": False, "error": f"資料庫 {db_name} 中沒有 GPU 指標數據"}
 
         chart_path = await run_in_threadpool(visualizer.plot_multi_gpu, gpu_metrics, gpu_ids=gpu_ids, timespan=timespan)
+        return_base64 = req.return_base64 if req else False
+
+        chart_data = {
+            "title": f"多 GPU 監控 ({timespan})",
+            "path": str(Path(chart_path).relative_to("plots"))
+        }
+        if return_base64:
+            chart_data["base64"] = encode_image_to_base64(chart_path)
 
         return {
             "success": True,
-            "chart": {
-                "title": f"多 GPU 監控 ({timespan})",
-                "path": str(Path(chart_path).relative_to("plots"))
-            },
+            "chart": chart_data,
             "gpu_count": len(set(m.get('gpu_id') for m in gpu_metrics)),
             "database": db_name
         }
@@ -516,12 +543,16 @@ async def plot_multiple_processes(req: PlotProcessesRequest):
         # 4. 調用 visualizer 生成圖表
         chart_path = await run_in_threadpool(visualizer.plot_process_comparison, process_data, req.pids, req.timespan)
 
+        chart_data = {
+            "title": f"進程對比圖 ({len(req.pids)} 個進程)",
+            "path": str(Path(chart_path).relative_to("plots"))
+        }
+        if req.return_base64:
+            chart_data["base64"] = encode_image_to_base64(chart_path)
+
         return {
             "success": True,
-            "chart": {
-                "title": f"進程對比圖 ({len(req.pids)} 個進程)",
-                "path": Path(chart_path).relative_to("plots")
-            }
+            "chart": chart_data
         }
     except Exception as e:
         error_msg = f"生成圖表時發生錯誤: {str(e)}"
@@ -529,9 +560,10 @@ async def plot_multiple_processes(req: PlotProcessesRequest):
 
 
 @app.post("/api/plot/process/{timespan}")
-async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks, 
+async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks,
                                process_name: str = None, command_filter: str = None,
-                               pid: int = None, group_by_pid: bool = True):
+                               pid: int = None, group_by_pid: bool = True,
+                               return_base64: bool = False):
     """生成進程特定圖表API"""
     try:
         from datetime import datetime, timedelta
@@ -578,16 +610,22 @@ async def generate_process_plot(timespan: str, background_tasks: BackgroundTasks
             
         chart_path = await run_in_threadpool(
             visualizer.plot_process_timeline,
-            process_data, 
-            process_name=filter_name, 
+            process_data,
+            process_name=filter_name,
             timespan=timespan,
             group_by_pid=group_by_pid
         )
-        
+
+        chart_data = {
+            "title": f"Process Timeline: {filter_name}",
+            "path": str(Path(chart_path).relative_to("plots"))
+        }
+        if return_base64:
+            chart_data["base64"] = encode_image_to_base64(chart_path)
+
         return {
-            "success": True, 
-            "chart": {"title": f"Process Timeline: {filter_name}", 
-                     "path": Path(chart_path).relative_to("plots")},
+            "success": True,
+            "chart": chart_data,
             "data_count": len(process_data)
         }
         

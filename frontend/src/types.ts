@@ -84,6 +84,7 @@ export interface DatabasesResponse {
 export interface ChartInfo {
   title: string;
   path: string;
+  base64?: string;
 }
 
 export interface PlotResponse {
