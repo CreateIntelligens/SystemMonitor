@@ -26,7 +26,7 @@ class GPUCollector:
     def __init__(self):
         self.gpu_available = self._check_nvidia_smi()
         self.docker_helper = DockerHelper()
-        self.process_helper = ProcessHelper()
+        self.process_helper = ProcessHelper(debug=False)
         self.debug = True
         self.nvml_initialized = False
         self._init_nvml()
@@ -516,49 +516,52 @@ class GPUCollector:
         for proc in matched_procs:
             if proc.info['pid'] in processes:
                 continue
-            
-            p = psutil.Process(proc.info['pid'])
-            nvml_info = self.get_pid_gpu_info(p.pid)
-            
-            if not nvml_info or not nvml_info.get('found'):
-                for container_pid, host_pid in pid_namespace_map.items():
-                    if host_pid == p.pid:
-                        nvml_info = self.get_pid_gpu_info(container_pid)
-                        break
-            
-            gpu_memory_mb = 0
-            gpu_utilization = 0
-            proc_type = 'Potential GPU (Keyword)'
-            
-            if nvml_info and nvml_info.get('found'):
-                gpu_memory_mb = nvml_info.get('vram_used_mb', 0)
-                gpu_utilization = nvml_info.get('gpu_utilization', 0)
-                
-                proc_type = f"🎯 GPU {nvml_info['gpu_id']}"
-                if gpu_utilization > 0:
-                    proc_type += f" - {gpu_utilization}% GPU"
-                if gpu_memory_mb > 0:
-                    proc_type += f" - {gpu_memory_mb}MB VRAM"
-            
-            container_info = container_map.get(p.pid, None)
-            container_name = container_info['name'] if container_info else 'Host'
-            container_source = f"{container_info['name']} ({container_info['image']})" if container_info else '主機'
-            
-            if p.pid not in processes:
-                cmd_line = ' '.join(proc.info['cmdline'] or [])
-                processes[p.pid] = {
-                    'pid': p.pid, 
-                    'name': p.name(),
-                    'command': cmd_line,
-                    'gpu_memory_mb': gpu_memory_mb,
-                    'gpu_utilization': gpu_utilization,
-                    'cpu_percent': round(p.cpu_percent(), 1),
-                    'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
-                    'start_time': datetime.fromtimestamp(p.create_time()).isoformat(),
-                    'type': proc_type,
-                    'container': container_name,
-                    'container_source': container_source
-                }
+
+            try:
+                p = psutil.Process(proc.info['pid'])
+                nvml_info = self.get_pid_gpu_info(p.pid)
+
+                if not nvml_info or not nvml_info.get('found'):
+                    for container_pid, host_pid in pid_namespace_map.items():
+                        if host_pid == p.pid:
+                            nvml_info = self.get_pid_gpu_info(container_pid)
+                            break
+
+                gpu_memory_mb = 0
+                gpu_utilization = 0
+                proc_type = 'Potential GPU (Keyword)'
+
+                if nvml_info and nvml_info.get('found'):
+                    gpu_memory_mb = nvml_info.get('vram_used_mb', 0)
+                    gpu_utilization = nvml_info.get('gpu_utilization', 0)
+
+                    proc_type = f"🎯 GPU {nvml_info['gpu_id']}"
+                    if gpu_utilization > 0:
+                        proc_type += f" - {gpu_utilization}% GPU"
+                    if gpu_memory_mb > 0:
+                        proc_type += f" - {gpu_memory_mb}MB VRAM"
+
+                container_info = container_map.get(p.pid, None)
+                container_name = container_info['name'] if container_info else 'Host'
+                container_source = f"{container_info['name']} ({container_info['image']})" if container_info else '主機'
+
+                if p.pid not in processes:
+                    cmd_line = ' '.join(proc.info['cmdline'] or [])
+                    processes[p.pid] = {
+                        'pid': p.pid,
+                        'name': p.name(),
+                        'command': cmd_line,
+                        'gpu_memory_mb': gpu_memory_mb,
+                        'gpu_utilization': gpu_utilization,
+                        'cpu_percent': round(p.cpu_percent(), 1),
+                        'ram_mb': round(p.memory_info().rss / (1024 * 1024), 1),
+                        'start_time': datetime.fromtimestamp(p.create_time()).isoformat(),
+                        'type': proc_type,
+                        'container': container_name,
+                        'container_source': container_source
+                    }
+            except psutil.NoSuchProcess:
+                continue
     
     def get_top_gpu_processes(self, limit: int = 10) -> Optional[List[Dict]]:
         """獲取佔用 GPU 最多的進程"""

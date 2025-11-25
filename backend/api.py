@@ -15,9 +15,11 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 PROJECT_ROOT = BACKEND_ROOT.parent
 
+import asyncio
+import json
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
@@ -164,17 +166,26 @@ async def home(request: Request):
 
 @app.get("/api/status")
 async def get_status():
-    """獲取系統狀態API"""
+    """獲取系統狀態API - 快速版本，不收集進程資訊"""
     try:
-        # 獲取當前狀態
+        # 快速獲取當前狀態（不包含進程掃描）
         try:
-            current_data = collector.collect_simple()
+            cpu_data = await run_in_threadpool(collector.system_collector.get_cpu_stats)
+            memory_data = await run_in_threadpool(collector.system_collector.get_memory_stats)
+
+            current_data = {
+                'cpu_usage': cpu_data.get('cpu_usage', 0),
+                'ram_usage': memory_data.get('ram_usage', 0),
+                'ram_used_gb': memory_data.get('ram_used_gb', 0),
+                'ram_total_gb': memory_data.get('ram_total_gb', 0),
+                'cpu_source': cpu_data.get('source', 'N/A'),
+                'ram_source': memory_data.get('source', 'N/A'),
+            }
         except Exception as e:
-            print(f"❌ collect_simple 失敗: {e}")
+            print(f"❌ 快速狀態收集失敗: {e}")
             current_data = {
                 'cpu_usage': 0, 'ram_usage': 0, 'ram_used_gb': 0, 'ram_total_gb': 0,
-                'gpu_usage': None, 'vram_usage': None, 'vram_used_mb': None, 'vram_total_mb': None,
-                'gpu_temperature': None, 'cpu_source': 'error', 'ram_source': 'error'
+                'cpu_source': 'error', 'ram_source': 'error'
             }
         
         # 獲取資料庫統計
@@ -202,24 +213,15 @@ async def get_status():
         except Exception:
             pass
 
-        # 獲取外網 IP 地址
-        external_ip = None
+        # 獲取內網 IP（移除外網 IP 查詢以加快響應）
+        local_ip = None
         try:
-            with urllib.request.urlopen("https://ifconfig.me/ip", timeout=3) as resp:
-                external_ip = resp.read().decode('utf-8').strip()
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
         except Exception:
-            pass
-
-        # 備用：獲取內網 IP
-        local_ip = external_ip
-        if not local_ip:
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-                s.close()
-            except Exception:
-                local_ip = "127.0.0.1"
+            local_ip = "127.0.0.1"
 
         system_info = {
             "hostname": hostname,
@@ -260,6 +262,80 @@ async def get_status():
     except Exception as e:
         print(f"❌ /api/status 錯誤: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stream/status")
+async def stream_status(request: Request):
+    """SSE 即時串流系統狀態"""
+
+    async def event_generator():
+        while True:
+            # 檢查客戶端是否斷開連接
+            if await request.is_disconnected():
+                break
+
+            try:
+                # 收集系統狀態
+                stats = await run_in_threadpool(collector.collect_all)
+
+                # 解析 CPU/RAM（數據在嵌套結構中）
+                cpu_data = stats.get('cpu', {})
+                ram_data = stats.get('memory', {})
+
+                # 取得 GPU 列表
+                gpu_list = []
+                gpu_stats = await run_in_threadpool(collector.gpu_collector.get_gpu_stats)
+                if gpu_stats:
+                    for gpu in gpu_stats:
+                        gpu_list.append({
+                            'gpu_id': gpu.get('gpu_id', 0),
+                            'gpu_name': gpu.get('gpu_name', 'Unknown GPU'),
+                            'gpu_usage': gpu.get('gpu_usage') or 0,
+                            'vram_usage': gpu.get('vram_usage') or 0,
+                            'vram_used_mb': gpu.get('vram_used_mb') or 0,
+                            'vram_total_mb': gpu.get('vram_total_mb') or 0,
+                            'temperature': gpu.get('temperature') or 0,
+                            'power_draw': gpu.get('power_draw') or 0,
+                            'power_limit': gpu.get('power_limit') or 0,
+                            'fan_speed': gpu.get('fan_speed') or 0,
+                            'clock_graphics': gpu.get('clock_graphics') or 0,
+                            'clock_memory': gpu.get('clock_memory') or 0,
+                            'clock_sm': gpu.get('clock_sm') or 0,
+                            'pcie_gen': gpu.get('pcie_gen'),
+                            'pcie_width': gpu.get('pcie_width'),
+                            'performance_state': gpu.get('performance_state'),
+                        })
+
+                # 構建精簡的數據包
+                data = {
+                    'timestamp': datetime.now().isoformat(),
+                    'cpu_usage': cpu_data.get('cpu_usage', 0) or 0,
+                    'ram_usage': ram_data.get('ram_usage', 0) or 0,
+                    'ram_used_gb': ram_data.get('ram_used_gb', 0) or 0,
+                    'ram_total_gb': ram_data.get('ram_total_gb', 0) or 0,
+                    'gpu_list': gpu_list,
+                }
+
+                # 發送 SSE 事件
+                yield f"data: {json.dumps(data)}\n\n"
+
+            except Exception as e:
+                print(f"❌ SSE 錯誤: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+            # 每 0.5 秒更新一次（模仿 GPU HOT）
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用 nginx 緩衝
+        }
+    )
+
 
 class PlotRequest(BaseModel):
     database_file: str | None = None

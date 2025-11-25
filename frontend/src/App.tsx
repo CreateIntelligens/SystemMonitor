@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { StatusCards } from './components/StatusCards';
 import { ProcessTable } from './components/ProcessTable';
 import { ChartPanel } from './components/ChartPanel';
+import RealtimeChart from './components/RealtimeChart';
 import type { SystemStatus, ProcessInfo, ProcessResponse } from './types';
 
 function App() {
@@ -73,8 +74,6 @@ function App() {
     <div className="min-h-screen bg-[#1a1b1e] text-gray-100 p-4 md:p-8 font-sans">
       <div className="max-w-[1600px] mx-auto">
         <Header systemInfo={status?.system_info} />
-        
-        <StatusCards status={status} />
 
         <div className="mb-8">
           <div className="flex gap-4 mb-6">
@@ -113,15 +112,24 @@ function App() {
           {mode === 'charts' ? (
             <ChartPanel />
           ) : (
-            <ProcessTable
-              processes={processes}
-              isLoading={isLoadingProcesses}
-              onRefresh={fetchProcesses}
-              mode={mode}
-              lastUpdated={lastUpdated}
-            />
+            <>
+              {mode === 'monitor' && (
+                <div className="mb-6">
+                  <RealtimeChart status={status} />
+                </div>
+              )}
+              <ProcessTable
+                processes={processes}
+                isLoading={isLoadingProcesses}
+                onRefresh={fetchProcesses}
+                mode={mode}
+                lastUpdated={lastUpdated}
+              />
+            </>
           )}
         </div>
+
+        <StatusCards status={status} />
       </div>
     </div>
   );
