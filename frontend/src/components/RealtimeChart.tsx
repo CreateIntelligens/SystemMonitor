@@ -58,13 +58,13 @@ const RealtimeChart: React.FC<RealtimeChartProps> = ({ status }) => {
   const [latestGpuData, setLatestGpuData] = useState<RealtimeData['gpu_list']>([]);
   const [latestCpu, setLatestCpu] = useState(0);
   const [latestRam, setLatestRam] = useState(0);
-  const [dataIndex, setDataIndex] = useState(0);
 
   // 保留最近 120 個資料點（60 秒，0.5s 間隔，模仿 GPU HOT）
   const maxDataPoints = 120;
 
   useEffect(() => {
     const eventSource = new EventSource('/api/stream/status');
+    let dataIndexRef = 0; // 使用區域變數來避免無限重建
 
     eventSource.onopen = () => {
       setIsConnected(true);
@@ -85,12 +85,12 @@ const RealtimeChart: React.FC<RealtimeChartProps> = ({ status }) => {
 
         const newPoint: ChartDataPoint = {
           time: timestamp,
-          index: dataIndex, // 保留 index 用於內部追蹤
+          index: dataIndexRef % maxDataPoints, // 循環使用索引,防止無限增長
           cpu: parsedData.cpu_usage || 0,
           ram: parsedData.ram_usage || 0,
         };
 
-        setDataIndex(prev => prev + 1);
+        dataIndexRef++;
 
         if (parsedData.gpu_list && parsedData.gpu_list.length > 0) {
           setGpuCount(parsedData.gpu_list.length);
@@ -129,7 +129,7 @@ const RealtimeChart: React.FC<RealtimeChartProps> = ({ status }) => {
     return () => {
       eventSource.close();
     };
-  }, [dataIndex]);
+  }, []); // 移除依賴,只在 mount 時建立連線
 
   // GPU 詳細視圖組件
   const GpuDetailView = ({ gpuId, color }: { gpuId: number; color: typeof GPU_COLORS[0] }) => {

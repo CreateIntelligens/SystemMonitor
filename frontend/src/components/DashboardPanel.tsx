@@ -44,7 +44,6 @@ const DashboardPanel: React.FC<DashboardPanelProps> = ({ status }) => {
   const [latestGpuData, setLatestGpuData] = useState<RealtimeData['gpu_list']>([]);
   const [latestCpu, setLatestCpu] = useState(0);
   const [latestRam, setLatestRam] = useState(0);
-  const [dataIndex, setDataIndex] = useState(0);
 
   // 10 分鐘 = 600 秒
   const maxDataPoints = 600;
@@ -70,10 +69,11 @@ const DashboardPanel: React.FC<DashboardPanelProps> = ({ status }) => {
     });
 
     return paddedData;
-  }, [data, maxDataPoints]);
+  }, [data]);
 
   useEffect(() => {
     const eventSource = new EventSource('/api/stream/status');
+    let dataIndexRef = 0; // 使用區域變數來避免無限重建
 
     eventSource.onopen = () => {
       setIsConnected(true);
@@ -92,14 +92,14 @@ const DashboardPanel: React.FC<DashboardPanelProps> = ({ status }) => {
         setLatestCpu(parsedData.cpu_usage || 0);
         setLatestRam(parsedData.ram_usage || 0);
 
-        setDataIndex(prev => prev + 1);
-
         const newPoint: ChartDataPoint = {
           time: timestamp,
-          index: dataIndex,
+          index: dataIndexRef % maxDataPoints, // 循環使用索引,防止無限增長
           cpu: parsedData.cpu_usage || 0,
           ram: parsedData.ram_usage || 0,
         };
+
+        dataIndexRef++;
 
         if (parsedData.gpu_list && parsedData.gpu_list.length > 0) {
           setGpuCount(parsedData.gpu_list.length);
@@ -133,7 +133,7 @@ const DashboardPanel: React.FC<DashboardPanelProps> = ({ status }) => {
     return () => {
       eventSource.close();
     };
-  }, []);
+  }, []); // 空依賴陣列,只在 mount 時建立連線
 
   // 格式化時間軸標籤
   const timeTicks = useMemo(() => {

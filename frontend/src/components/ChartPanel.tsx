@@ -68,8 +68,11 @@ export function ChartPanel() {
   const generateCharts = async () => {
     setIsLoading(true);
     setError(null);
+
+    // 清理舊圖表以釋放記憶體
     setCharts([]);
     setGpuChart(null);
+    setExpandedChart(null);
 
     try {
       if (chartMode === 'system') {

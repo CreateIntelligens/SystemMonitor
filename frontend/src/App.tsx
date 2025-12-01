@@ -64,9 +64,18 @@ function App() {
       }
     }, 5000);
 
+    // 清理機制：每10分鐘強制垃圾回收提示
+    const cleanupInterval = setInterval(() => {
+      if (window.gc) {
+        console.log('[Memory] Triggering manual garbage collection');
+        window.gc();
+      }
+    }, 10 * 60 * 1000); // 10分鐘
+
     return () => {
       clearInterval(statusInterval);
       clearInterval(processInterval);
+      clearInterval(cleanupInterval);
     };
   }, [mode]);
 
