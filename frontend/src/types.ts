@@ -93,3 +93,35 @@ export interface PlotResponse {
   error?: string;
   database?: string;
 }
+
+export interface RealtimeData {
+  timestamp: string;
+  cpu_usage: number;
+  ram_usage: number;
+  ram_used_gb?: number;
+  ram_total_gb?: number;
+  gpu_list: Array<{
+    gpu_id: number;
+    gpu_name?: string;
+    gpu_usage: number;
+    vram_usage: number;
+    vram_used_mb?: number;
+    vram_total_mb?: number;
+    temperature: number;
+    power_draw?: number;
+    power_limit?: number;
+    fan_speed?: number;
+    clock_graphics?: number;
+    clock_memory?: number;
+    clock_sm?: number;
+    pcie_gen?: number;
+    pcie_width?: number;
+    performance_state?: string;
+  }>;
+}
+
+export interface ChartDataPoint {
+  time: string;
+  index: number;
+  [key: string]: number | string;
+}
